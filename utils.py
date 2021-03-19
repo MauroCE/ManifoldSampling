@@ -1,6 +1,7 @@
 from scipy.stats import multivariate_normal
 import numpy as np
 import plotly.graph_objects as go
+from numpy.linalg import norm, inv
 
 
 def logf(xyz):
@@ -40,3 +41,10 @@ def normalize(x):
     Normalizes a vector.
     """
     return x / np.sqrt(np.sum(x**2))
+
+
+def logf_Jacobian(xy, Sigma):
+    """
+    1 / Jacobian of log pi
+    """
+    return 1 / norm(inv(Sigma) @ xy) # 1 / norm(inv(Sigma) @ xy)
