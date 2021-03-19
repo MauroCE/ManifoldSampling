@@ -20,11 +20,18 @@ class RotatedEllipse(Manifold):
         self.a_sq, self.b_sq, self.theta = self._find_ab_theta()
         self.a = np.sqrt(self.a_sq)
         self.b = np.sqrt(self.b_sq)
+        self.ab_sq = np.array([self.a_sq, self.b_sq])
         # Store calculations
         self.ct = np.cos(self.theta)
         self.st = np.sin(self.theta)
         self.ctmst = np.array([self.ct, -self.st])   # (cos(theta), -sin(theta))
         self.stct = np.array([self.st, self.ct]) # (sin(theta), cos(theta))
+        # Counter-clockwise Rotation matrix
+        self.R = np.array([[self.ct, -self.st], 
+                           [self.st, self.ct]])
+        # Clockwise Rotation matrix
+        self.Rp = np.array([[self.ct, self.st], 
+                            [-self.st, self.ct]])
         super().__init__(m=1, d=1)
 
     def to_cartesian(self, t):
@@ -48,8 +55,18 @@ class RotatedEllipse(Manifold):
 
     def Q(self, xy):
         """
+        New version of the gradient.
+        """
+        # Center the points and un-rotate them
+        xy = self.Rp @ (xy - self.mu)
+        return (self.R @ (2*xy / self.ab_sq)).reshape(-1, self.m)
+        #return (self.R @ ((2 * xy) / self.ab_sq)).reshape(-1, self.m)
+
+    def Q_old(self, xy):
+        """
         Transpose of the Jacobian.
         """
+        xy = xy - self.mu
         dxq = (2*np.dot(xy, self.ctmst)*self.ct/self.a_sq) + (2*np.dot(xy, self.stct)*self.st/self.b_sq)
         dyq = -(2*np.dot(xy, self.ctmst)*self.st/self.a_sq) + (2*np.dot(xy, self.stct)*self.ct/self.b_sq)
         return np.array([dxq, dyq]).reshape(-1, self.m)
@@ -80,13 +97,22 @@ class RotatedEllipse(Manifold):
         vals, P = eigh(self.S)
         v1, v2 = P[:, 0], P[:, 1]
         # Find out which one is counter-clockwise (cc). Here v1_cc_v2 stands for v1 counter-clockwise to v2
-        v1_cc_v2 = int((v2[1] + v1[0] == 0))
+        v1_cc_v2 = int(v1[0]*v2[1] < v2[0]*v1[1])
+        #v1_cc_v2 = int((v2[1] + v1[0] == 0))
         # Remember if v1 cc v2 then we use v2, not v1
         theta = np.arctan2(*(v1_cc_v2*v2 + (1 - v1_cc_v2)*v1)[::-1])
         # Compute a^2 and b^2
         a_sq = self.gamma * vals[v1_cc_v2]
         b_sq = self.gamma * vals[1 - v1_cc_v2]
         return a_sq, b_sq, theta    
+
+    def J(self, z):
+      """
+      Computes Jacobian of the reparametrization. See notes.
+      """
+      lambda_a = self.a_sq / self.gamma
+      lambda_b = self.b_sq / self.gamma
+      return np.sqrt(lambda_a * lambda_b) / z
 
     def _find_ab_theta_old(self):
         """
