@@ -108,5 +108,6 @@ class GaussianTargetHMC:
                 # Accept
                 q = q_prime
             samples[i + 1] = q
-        return samples
+        # Return all samples except for the first one
+        return samples[1:]
         
