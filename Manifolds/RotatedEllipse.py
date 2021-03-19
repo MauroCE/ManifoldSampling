@@ -2,7 +2,7 @@ import numpy as np
 from numpy.linalg import eigh, inv
 from Manifolds.Manifold import Manifold
 import matplotlib.pyplot as plt
-from math import log
+from math import log, sqrt
 
 
 
@@ -113,6 +113,10 @@ class RotatedEllipse(Manifold):
       lambda_a = self.a_sq / self.gamma
       lambda_b = self.b_sq / self.gamma
       return np.sqrt(lambda_a * lambda_b) / z
+
+    def peri(self):
+      """ Computes perimeter of ellipse using Ramanujan's formula. """
+      return np.pi * (3*(self.a+self.b) - sqrt((3*self.a + self.b) * (self.a + self.b*3)))
 
     def _find_ab_theta_old(self):
         """

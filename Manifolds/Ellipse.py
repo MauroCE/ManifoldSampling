@@ -22,7 +22,7 @@ class Ellipse(Manifold):
         self.a = a
         self.b = b
         self.ab_sq = np.array([self.a**2, self.b**2])
-        self.theta
+        self.theta = theta
 
     def to_cartesian(self, theta):
         """
