@@ -6,7 +6,7 @@ from Manifolds.RotatedEllipse import RotatedEllipse
 from utils import logf, logp
 
 
-def AlternatingManifoldHMC(x0, n, m, Sigma, mu, T, epsilon, M, s=0.5, tol=1.48e-08, a_guess=1):
+def AlternatingManifoldHMC(x0, N, n, m, Sigma, mu, T, epsilon, M, s=0.5, tol=1.48e-08, a_guess=1):
     """
     This is the most basic version of ManifoldHMC. We use 1 HMC step followed by m 
     steps of the Zappa algorithm. We do this n times so that the total number of samples 
@@ -14,9 +14,12 @@ def AlternatingManifoldHMC(x0, n, m, Sigma, mu, T, epsilon, M, s=0.5, tol=1.48e-
     
     x0 : Numpy Array
          Initial vector (2, ) where we start our algorithm. Equivalently, could be thought of q0.
+
+    N : Int
+        Total number of samples.
          
     n : Int
-        Number of HMC steps.
+        Number of HMC steps per iteration.
         
     m : Int
         Number of manifold sampling steps on each contour.
@@ -47,10 +50,10 @@ def AlternatingManifoldHMC(x0, n, m, Sigma, mu, T, epsilon, M, s=0.5, tol=1.48e-
     target = multivariate_normal(mean=mu, cov=Sigma)
     x = x0
     samples = x
-    for i_hmc in range(n):
+    while len(samples) < N:
         
         # 1 HMC step. Recall this returns [q0, q1] so we are only interested in the last one. (2, )
-        x_hmc = GaussianTargetHMC(q0=x, n=1, M=M, T=T, epsilon=epsilon, Sigma=Sigma, mu=mu).sample()[-1]
+        x_hmc = GaussianTargetHMC(q0=x, n=n, M=M, T=T, epsilon=epsilon, Sigma=Sigma, mu=mu).sample()[-1]
         z = target.pdf(x_hmc)
         
         # m steps of Zappa (m, 2)
@@ -62,9 +65,7 @@ def AlternatingManifoldHMC(x0, n, m, Sigma, mu, T, epsilon, M, s=0.5, tol=1.48e-
         
         # Store samples
         samples = np.vstack((samples, x_hmc))
-        samples = np.vstack((samples, samples_zappa))
-        #samples[i_hmc] = x_hmc
-        #samples[(i_hmc+1):(i_hmc+1+m)] = samples_zappa
+        samples = np.vstack((samples, samples_zappa)) 
         
         # Last Zappa sample will be next sample
         x = samples_zappa[-1]
