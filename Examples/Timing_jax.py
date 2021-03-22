@@ -1,29 +1,12 @@
 import sys
+sys.path.append("..")
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
-sys.path.append(r'/Users/ys18223/Documents/GitHub/ManifoldSampling')  ##Check your path
-from Manifolds.ManifoldAD import Manifold
-from zappa import zappa_sampling
-
-import numpy as np
-from numpy.random import randn
-import matplotlib.pyplot as plt
-from numpy import pi
-from scipy.stats import multivariate_normal, norm
-import matplotlib.cm as cm
-from matplotlib.legend_handler import HandlerPatch
-import matplotlib.patches as mpatches
-from scipy.optimize import root
-from mpl_toolkits.mplot3d import Axes3D
-from numpy.linalg import qr, svd
-import plotly.express as px
-import plotly.graph_objects as go
-import numpy as np
-from utils import logf, logp, quick_3d_scatter, normalize
 from Manifolds.Sphere import Sphere
+from Manifolds.ManifoldAD import Manifold
 from zappa import zappa_sampling, project
+from utils import logf, logp, quick_3d_scatter, normalize
 import time
 
 
