@@ -1,6 +1,6 @@
 from numpy.linalg import svd
 from scipy.optimize import root
-from jax import jacfwd
+from jax import jacfwd,jit
 
 class Manifold:
     def __init__(self, m, d, q):
@@ -15,7 +15,7 @@ class Manifold:
         self.m = m
         self.d = d
         self.q=q
-        self.Q=jacfwd(self.q)
+        self.Q=jit(jacfwd(self.q))
 
     def tangent_basis(self,x):
         """
