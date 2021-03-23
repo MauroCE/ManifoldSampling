@@ -1,16 +1,17 @@
 import numpy as np
 from scipy.stats import multivariate_normal
-from zappa import zappa_sampling
-from gaussian_hmc import GaussianTargetHMC
-from Manifolds.RotatedEllipse import RotatedEllipse
 from utils import logf, logp
+from zappa import zappa_sampling
+from HMC.gaussian_hmc import GaussianTargetHMC
+from Manifolds.RotatedEllipse import RotatedEllipse
+
 
 
 def AlternatingManifoldHMC(x0, N, n, m, Sigma, mu, T, epsilon, M, s=0.5, tol=1.48e-08, a_guess=1):
     """
-    This is the most basic version of ManifoldHMC. We use 1 HMC step followed by m 
-    steps of the Zappa algorithm. We do this n times so that the total number of samples 
-    we obtain is n * m.
+    This is the most basic version of ManifoldHMC. We use n HMC steps followed by m 
+    steps of the Zappa algorithm (where the m Zappa steps start from the last HMC step).
+    We do this many times until the total number of samples is N.
     
     x0 : Numpy Array
          Initial vector (2, ) where we start our algorithm. Equivalently, could be thought of q0.
@@ -52,22 +53,23 @@ def AlternatingManifoldHMC(x0, N, n, m, Sigma, mu, T, epsilon, M, s=0.5, tol=1.4
     samples = x
     while len(samples) < N:
         
-        # 1 HMC step. Recall this returns [q0, q1] so we are only interested in the last one. (2, )
-        x_hmc = GaussianTargetHMC(q0=x, n=n, M=M, T=T, epsilon=epsilon, Sigma=Sigma, mu=mu).sample()[-1]
+        # n HMC step. (n, 2)
+        hmc_samples = GaussianTargetHMC(q0=x, n=n, M=M, T=T, epsilon=epsilon, Sigma=Sigma, mu=mu).sample()
+        x_hmc = hmc_samples[-1]  # Grab last step. This is where Zappa will start
         z = target.pdf(x_hmc)
         
         # m steps of Zappa (m, 2)
-        samples_zappa = zappa_sampling(
+        zappa_samples = zappa_sampling(
             x_hmc, 
             RotatedEllipse(mu, Sigma, z), 
             logf, logp, m, s, tol, a_guess
         )
         
         # Store samples
-        samples = np.vstack((samples, x_hmc))
-        samples = np.vstack((samples, samples_zappa)) 
+        samples = np.vstack((samples, hmc_samples))
+        samples = np.vstack((samples, zappa_samples[1:]))   # The last HMC sample and first Zappa sample are the same!
         
         # Last Zappa sample will be next sample
-        x = samples_zappa[-1]
+        x = zappa_samples[-1]
         
     return samples    
