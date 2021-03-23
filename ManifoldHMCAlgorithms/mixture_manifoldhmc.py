@@ -1,17 +1,17 @@
 import numpy as np
 from scipy.stats import multivariate_normal
 from zappa import zappa_sampling
-from gaussian_hmc import GaussianTargetHMC
+from HMC.gaussian_hmc import GaussianTargetHMC
 from Manifolds.RotatedEllipse import RotatedEllipse
 from utils import logf, logp
 
 
 
-def MixtureManifoldHMCJacobian(x0, alpha, N, n, m, Sigma, mu, T, epsilon, M, s=0.5, tol=1.48e-08, a_guess=1):
+def MixtureManifoldHMC(x0, alpha, N, n, m, Sigma, mu, T, epsilon, M, s=0.5, tol=1.48e-08, a_guess=1):
     """
-    In this version of ManifoldHMC we use a mixture kernel. With probability alpha we choose
-    1 step of HMC, with probability (1 - alpha) we choose m Zappa steps.
-    IMPORTANT: Notice that here n is the number of HMC samples at each "iteration".
+    In this version of ManifoldHMC we use a mixture kernel. 
+    With probability alpha we choose n steps of HMC, with probability (1 - alpha) we choose 
+    m Zappa steps. Notice that here n is the number of HMC samples at each "iteration".
     Total number of samples is N.
     
     x0 : Numpy Array
@@ -56,20 +56,17 @@ def MixtureManifoldHMCJacobian(x0, alpha, N, n, m, Sigma, mu, T, epsilon, M, s=0
     target = multivariate_normal(mean=mu, cov=Sigma)
     x, z = x0, target.pdf(x0)
     samples = x
-    flags = np.array([0])   # First one is HMC. 0 = HMC, 1 = Zappa
     while len(samples) < N: 
 
         # With probability alpha do n steps of HMC 
         if np.random.rand() <= alpha:
-            new_samples = GaussianTargetHMC(q0=x, n=n, M=M, T=T, epsilon=epsilon, Sigma=Sigma, mu=mu).sample()   #[1:]
-            flags = np.hstack((flags, np.repeat(0, n)))
+            new_samples = GaussianTargetHMC(q0=x, n=n, M=M, T=T, epsilon=epsilon, Sigma=Sigma, mu=mu).sample()
             
         # With probability 1 - alpha do m steps of Zappa's algorithm
         else:
             new_samples = zappa_sampling(x, RotatedEllipse(mu, Sigma, z), logf, logp, m, s, tol, a_guess)
-            flags = np.hstack((flags, np.repeat(1, m)))
             
         samples = np.vstack((samples, new_samples))
         x = new_samples[-1]
         z = target.pdf(x)
-    return samples, flags
+    return samples
