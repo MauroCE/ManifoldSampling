@@ -47,4 +47,4 @@ def logf_Jacobian(xy, Sigma):
     """
     1 / Jacobian of log pi
     """
-    return 1 / norm(inv(Sigma) @ xy) # 1 / norm(inv(Sigma) @ xy)
+    return np.log(1 / norm(inv(Sigma) @ xy)) # 1 / norm(inv(Sigma) @ xy)
