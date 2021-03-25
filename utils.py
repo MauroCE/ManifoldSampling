@@ -1,7 +1,9 @@
 from scipy.stats import multivariate_normal
+import scipy
 import numpy as np
 import plotly.graph_objects as go
 from numpy.linalg import norm, inv
+import matplotlib.pyplot as plt
 
 
 def logf(xyz):
@@ -35,6 +37,40 @@ def quick_3d_scatter(samples):
         ]
     )
     fig.show()
+
+def quick_MVN_scatter(samples, target, xlims=[-2, 6], ylims=[-3, 5], figsize=(20, 8), lw=5):
+    """
+    Plots 2D samples and contours of MVN.
+    """
+    # Grid of points for contour plot
+    x, y = np.mgrid[xlims[0]:xlims[1]:.01, ylims[0]:ylims[1]:.01]
+    pos = np.dstack((x, y))
+
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.contour(x, y, target.pdf(pos), linewidths=lw) 
+    ax.scatter(*samples.T)
+    plt.show()
+
+def quick_MVN_marginals(samples, target, lims=(-4,4), figsize=(20,5), n=100, bins=50):
+    """
+    Plots marginals.
+    """
+    marginal_x = lambda x: scipy.stats.norm(loc=target.mean[0], scale=np.sqrt(target.cov[0, 0])).pdf(x)
+    marginal_y = lambda y: scipy.stats.norm(loc=target.mean[1], scale=np.sqrt(target.cov[1, 1])).pdf(y)
+
+    x = np.linspace(lims[0], lims[1], num=n)
+
+    fig, ax = plt.subplots(ncols=2, figsize=figsize)
+    # X marginal
+    ax[0].plot(x, marginal_x(x))
+    _ = ax[0].hist(samples[:, 0], density=True, bins=bins)
+    # Y marginal
+    ax[1].plot(x, marginal_y(x))
+    _ = ax[1].hist(samples[:, 1], density=True, bins=bins)
+    plt.show()
+
+
+
 
 def normalize(x):
     """
