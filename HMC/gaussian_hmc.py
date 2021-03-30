@@ -36,6 +36,7 @@ class GaussianTargetHMC:
         self.q0 = q0
         self.n = n
         self.M = M
+        self.Minv = np.linalg.inv(self.M)
         self.T = T
         self.epsilon = epsilon
         self.Sigma = Sigma
@@ -64,11 +65,11 @@ class GaussianTargetHMC:
 
         # n - 1 full steps of both position and momentum
         for i in range(int(self.T / self.epsilon) - 1):
-            q = q + self.epsilon * p
+            q = q + self.epsilon * (self.Minv @ p)
             p = p - self.epsilon * self.dVdq(q)
 
         # Last full position step
-        q = q + self.epsilon * p
+        q = q + self.epsilon * (self.Minv @ p)
         # Final half-step 
         p = p - (self.epsilon / 2) * self.dVdq(q)
 
