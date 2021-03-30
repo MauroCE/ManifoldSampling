@@ -1,6 +1,7 @@
 import numpy as np
 from scipy.stats import multivariate_normal
-from utils import logf, logp
+from utils import logp as logp_scale
+from utils import logf_Jacobian
 from Zappa.zappa import zappa_sampling
 from HMC.gaussian_hmc import GaussianTargetHMC
 from Manifolds.RotatedEllipse import RotatedEllipse
@@ -49,6 +50,8 @@ def AlternatingManifoldHMC(x0, N, n, m, Sigma, mu, T, epsilon, M, s=0.5, tol=1.4
               Initial guess for projection in Zappa algorithm
     """
     target = multivariate_normal(mean=mu, cov=Sigma)
+    logf = lambda xy: logf_Jacobian(xy, Sigma)
+    logp = lambda xy: logp_scale(xy, s)
     x = x0
     samples = x
     while len(samples) < N:
