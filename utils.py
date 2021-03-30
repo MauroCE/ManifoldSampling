@@ -38,7 +38,7 @@ def quick_3d_scatter(samples):
     )
     fig.show()
 
-def quick_MVN_scatter(samples, target, xlims=[-2, 6], ylims=[-3, 5], figsize=(20, 8), lw=5):
+def quick_MVN_scatter(samples, target, xlims=[-2, 6], ylims=[-3, 5], figsize=(20, 8), lw=5, levels=None, alpha=1.0, zorder=1, colors='gray'):
     """
     Plots 2D samples and contours of MVN.
     """
@@ -47,7 +47,10 @@ def quick_MVN_scatter(samples, target, xlims=[-2, 6], ylims=[-3, 5], figsize=(20
     pos = np.dstack((x, y))
 
     fig, ax = plt.subplots(figsize=figsize)
-    ax.contour(x, y, target.pdf(pos), linewidths=lw) 
+    if levels is None:
+        ax.contour(x, y, target.pdf(pos), linewidths=lw) 
+    else:
+        ax.contour(x, y, target.pdf(pos), linewidths=lw, levels=levels, alpha=alpha, zorder=1, colors=colors) 
     ax.scatter(*samples.T)
     plt.show()
 
