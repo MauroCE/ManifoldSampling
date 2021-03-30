@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.stats import multivariate_normal
 from utils import logf, logp
-from zappa import zappa_sampling
+from Zappa.zappa import zappa_sampling
 from HMC.gaussian_hmc import GaussianTargetHMC
 from Manifolds.RotatedEllipse import RotatedEllipse
 
