@@ -42,6 +42,16 @@ def zappa_sampling(x0, manifold, logf, logp, n, sigma, tol, a_guess, root=None, 
     a_guess : Float
               Initial guess for a. Used by the root-finding algorithm.
 
+    root : String (or None)
+           Used to choose which root-finding algorithm to use. If `root=None` then 
+           we use `scipy.optimize.root()` but without using any Jacobian information.
+           If `root='root'` we still use `scipy.optimize.root()` just this time we feed in
+           also the Jacobian (see paper). If `root='newton'` then we use the Newton method 
+           implemented by Zappa.
+
+    maxiter : Int
+              Maximum number of iterations used by the root-finding algorithm to find a.
+
     Returns the samples as an array of dimensions (n, d + m)
     """
     # Choose which function to use to project onto the manifold
@@ -143,8 +153,8 @@ def project_original(x, v, Q, q, tol=None, a_guess=1, maxiter=50):
     """Finds a such that q(x + v + a*Q) = 0"""
     if len(Q.shape) == 2:
         Q = Q.flatten()
-    opt_output = root(lambda a: q(x + v + a*Q), a_guess, tol=tol, options={'maxfev':maxiter})
-    return (opt_output.x, opt_output.success, 0, 0, 0) # output flag for accept/reject
+    out = root(lambda a: q(x + v + a*Q), a_guess, tol=tol, options={'maxfev':maxiter})
+    return (out.x, out.success, out.nfev , 0, 0) # output flag for accept/reject
 
 
 def project_root(x, v, Q, q, grad_q, tol=None, a_guess=1, maxiter=50):
