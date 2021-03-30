@@ -3,7 +3,8 @@ from scipy.stats import multivariate_normal
 from zappa import zappa_sampling
 from HMC.gaussian_hmc import GaussianTargetHMC
 from Manifolds.RotatedEllipse import RotatedEllipse
-from utils import logf, logp
+from utils import logf_Jacobian
+from utils import logp as logp_scale
 
 
 
@@ -54,6 +55,8 @@ def MixtureManifoldHMC(x0, alpha, N, n, m, Sigma, mu, T, epsilon, M, s=0.5, tol=
               Initial guess for projection in Zappa algorithm
     """
     target = multivariate_normal(mean=mu, cov=Sigma)
+    logf = lambda xy: logf_Jacobian(xy, Sigma)
+    logp = lambda xy: logp_scale(xy, s)
     x, z = x0, target.pdf(x0)
     samples = x
     while len(samples) < N: 
