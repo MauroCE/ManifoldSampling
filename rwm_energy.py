@@ -155,15 +155,15 @@ class RWEnergy:
             if not out.success:
 
                 # Sample again on the contour & update normalizing constant
-                xunew = zappa_sampling(xu[-1], contour, self.logf, logp, self.n, s, self.tol, self.a_guess)  # Sample again. Start from last point on this contour. Same optimal scaling.
-                wunew = self.compute_weights(xunew)                                                      # Compute new weights
-                wunewnorm = wunew / np.sum(wunew)                                                       # Normalize weights
-                zu = (zu + np.mean(wunew)) / 2                                                          # Update normalizing constant. TODO: Check wu, wunew have same length.
+                xu = zappa_sampling(xu[-1], contour, self.logf, logp, self.n, s, self.tol, self.a_guess)  # Sample again. Start from last point on this contour. Same optimal scaling.
+                wu = self.compute_weights(xu)                                                      # Compute new weights
+                wunorm = wu / np.sum(wu)                                                       # Normalize weights
+                zu = (zu + np.mean(wu)) / 2                                                          # Update normalizing constant. TODO: Check wu, wunew have same length.
 
                 # Store the new samples, weights & (same) energy
-                self.weights = np.hstack((self.weights, wunew))
-                self.samples = np.vstack((self.samples, xunew))
-                self.normweights = np.hstack((self.normweights, wunewnorm))
+                self.weights = np.hstack((self.weights, wu))
+                self.samples = np.vstack((self.samples, xu))
+                self.normweights = np.hstack((self.normweights, wunorm))
                 self.energies.append(u)
                 self.energies_long = np.hstack((self.energies_long, np.repeat(u, self.n)))
                 self.normalizing_constants.append(zu)
@@ -191,7 +191,7 @@ class RWEnergy:
 
             # Metropolis-Hastings
             rhat = (zucand / zu) * np.exp(u - ucand)
-            
+
             if rand() <= min(1, rhat):
                 # Accept candidate! Now update all the variables
                 u = ucand
@@ -220,8 +220,8 @@ class RWEnergy:
             self.weights = np.hstack((self.weights, wu))
             self.normweights = np.hstack((self.normweights, wunorm))
             self.normalizing_constants.append(zu)
-
-        pass
+        return self.samples, self.energies, self.weights, self.normweights, self.failed_rootfindings, self.normalizing_constants,
+        self.rejected_energies, self.energies_long, self.failed_reverserootfindings
         
     def _compute_clipped_weights(self, samples):
         """Computes the weights using clipping."""
