@@ -4,6 +4,8 @@ import numpy as np
 import plotly.graph_objects as go
 from numpy.linalg import norm, inv
 import matplotlib.pyplot as plt
+from scipy.stats import gaussian_kde
+from scipy.stats import expon
 
 
 def logf(xyz):
@@ -18,6 +20,10 @@ def logp(xyz, sigma=0.5):
     normal distribution with scale sigma.
     """
     return multivariate_normal.logpdf(xyz, mean=np.zeros(2), cov=(sigma**2)*np.eye(2))
+
+def logpexp_scale(xyz, scale=1.0):
+    """Exponential proposal log density"""
+    return expon.logpdf(xyz, scale=scale)
 
 def quick_3d_scatter(samples):
     """
@@ -38,12 +44,12 @@ def quick_3d_scatter(samples):
     )
     fig.show()
 
-def quick_MVN_scatter(samples, target, xlims=[-2, 6], ylims=[-3, 5], figsize=(20, 8), lw=5, levels=None, alpha=1.0, zorder=1, colors='gray'):
+def quick_MVN_scatter(samples, target, xlims=[-2, 6], ylims=[-3, 5], figsize=(20, 8), lw=5, levels=None, alpha=1.0, zorder=1, colors='gray', step=0.01, return_axes=False):
     """
     Plots 2D samples and contours of MVN.
     """
     # Grid of points for contour plot
-    x, y = np.mgrid[xlims[0]:xlims[1]:.01, ylims[0]:ylims[1]:.01]
+    x, y = np.mgrid[xlims[0]:xlims[1]:step, ylims[0]:ylims[1]:step]
     pos = np.dstack((x, y))
 
     fig, ax = plt.subplots(figsize=figsize)
@@ -52,28 +58,52 @@ def quick_MVN_scatter(samples, target, xlims=[-2, 6], ylims=[-3, 5], figsize=(20
     else:
         ax.contour(x, y, target.pdf(pos), linewidths=lw, levels=levels, alpha=alpha, zorder=1, colors=colors) 
     ax.scatter(*samples.T)
-    plt.show()
+    if not return_axes:
+        plt.show()
+    else:
+        return fig, ax
 
-def quick_MVN_marginals(samples, target, lims=(-4,4), figsize=(20,5), n=100, bins=50):
+def quick_MVN_marginals(samples, target, xlims=(-4,4), ylims=(-4,4), figsize=(20,5), n=100, bins=50):
     """
     Plots marginals.
     """
     marginal_x = lambda x: scipy.stats.norm(loc=target.mean[0], scale=np.sqrt(target.cov[0, 0])).pdf(x)
     marginal_y = lambda y: scipy.stats.norm(loc=target.mean[1], scale=np.sqrt(target.cov[1, 1])).pdf(y)
 
-    x = np.linspace(lims[0], lims[1], num=n)
+    x = np.linspace(xlims[0], xlims[1], num=n)
+    y = np.linspace(ylims[0], ylims[1], num=n)
 
     fig, ax = plt.subplots(ncols=2, figsize=figsize)
     # X marginal
     ax[0].plot(x, marginal_x(x))
     _ = ax[0].hist(samples[:, 0], density=True, bins=bins)
+    #ax[0].set_aspect("equal")
     # Y marginal
-    ax[1].plot(x, marginal_y(x))
+    ax[1].plot(y, marginal_y(y))
     _ = ax[1].hist(samples[:, 1], density=True, bins=bins)
+    #ax[1].set_aspect("equal")
     plt.show()
 
 
-
+def quick_MVN_marginals_kde(samples, target, lims=(-4, 4), figsize=(20, 5), n=100, bins=50):
+    """
+    Plots KDE.
+    """
+    # KDE estimators
+    xkde = gaussian_kde(samples[:, 0])
+    ykde = gaussian_kde(samples[:, 1])
+    # True Marginals
+    marginal_x = lambda x: scipy.stats.norm(loc=target.mean[0], scale=np.sqrt(target.cov[0, 0])).pdf(x)
+    marginal_y = lambda y: scipy.stats.norm(loc=target.mean[1], scale=np.sqrt(target.cov[1, 1])).pdf(y)
+    # Data for plot
+    x = np.linspace(lims[0], lims[1], num=n)
+    # plot
+    fig, ax = plt.subplots(ncols=2, figsize=figsize)
+    ax[0].plot(x, marginal_x(x))
+    ax[0].plot(x, xkde(x))
+    ax[1].plot(x, marginal_y(x))
+    ax[1].plot(x, ykde(x))
+    plt.show()
 
 def normalize(x):
     """
@@ -87,3 +117,53 @@ def logf_Jacobian(xy, Sigma):
     1 / Jacobian of log pi
     """
     return np.log(1 / norm(inv(Sigma) @ xy)) # 1 / norm(inv(Sigma) @ xy)
+
+
+def prep_contour(xlims, ylims, step, func):
+    x = np.arange(*xlims, step)
+    y = np.arange(*ylims, step)
+    x, y = np.meshgrid(x, y)
+    xshape = x.shape
+    xfl, yfl = x.flatten(), y.flatten()
+    xys = np.vstack((xfl, yfl)).T
+    return x, y, func(xys).reshape(xshape)
+
+
+def update_scale_sa(ap, ap_star, k, l, exponent=(2/3)):
+    """
+    Updates the scale in adaptive zappa.
+
+    ap : float
+         Current acceptance probability
+
+    ap_star : float
+              Target acceptance probability.
+
+    k : int 
+        Iteration number. Notice that it must start from 1, not 0!
+
+    l : float
+        Current value of log scale
+
+    exponent : float
+               Exponent for the step size.
+
+    Returns
+    -------
+    s : float
+        Updated exponential scale value
+    l : float
+        Updated log scale value
+    """
+    step_size = 1 / k ** exponent
+    l = l + step_size * (ap - ap_star)
+    return np.exp(l), l
+
+
+def angle_between(v1, v2):
+    """
+    Computes angle in radiant between two n-dimensional vectors.
+    """
+    v1_u = normalize(v1)
+    v2_u = normalize(v2)
+    return np.arccos(np.clip(np.dot(v1_u, v2_u), -1.0, 1.0))

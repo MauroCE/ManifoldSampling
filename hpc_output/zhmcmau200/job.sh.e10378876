@@ -1,0 +1,4 @@
+script.py:347: RuntimeWarning: overflow encountered in exp
+  return np.exp(l), l
+script.py:96: RuntimeWarning: invalid value encountered in double_scalars
+  xx = (xc*self.ct + yc*self.st)**2 / self.a_sq

@@ -85,8 +85,8 @@ class RWEnergy:
         self.clipval = clipval
         self.tol = tol
         self.a_guess = a_guess
-        self.glp
-        self.lbval
+        self.glp = glp
+        self.lbval = lbval
         self.reversecheck = reversecheck
         
         # Variables to store things
@@ -98,13 +98,14 @@ class RWEnergy:
         self.failed_reverserootfindings = 0
         self.rejected_energies = []
         self.energies_long = None
+        self.rejected_energies_reverse = []
 
         # Check that we have lower bound value when we need it
         if not clip and lbval is None:
             raise ValueError("You must provide `lbval` when `clip` is False.") 
 
         # Functions
-        self.U = lambda xy: -target.logpdf(xy)          # Potential Function
+        self.U = lambda xy: -self.target.logpdf(xy)          # Potential Function
         self.logf = lambda xy: 0                        # Uniform target on contour
 
         # Choose correct function to compute weights
@@ -117,7 +118,7 @@ class RWEnergy:
         if reversecheck:
             self.check_reverse = self._check_reverse
 
-    def sample():
+    def sample(self):
         """
         Samples from the target.
         """
@@ -127,7 +128,7 @@ class RWEnergy:
         s = self.scale_func(z)
         logp = lambda xy: logp_scale(xy, s)
         contour = self.contour_func(z)
-        xu = zappa_sampling(x, contour, self.logf, logp, self.n, s, self.tol, self.a_guess)
+        xu = zappa_sampling(self.x, contour, self.logf, logp, self.n, s, self.tol, self.a_guess)
         wu = self.compute_weights(xu)
         wunorm = wu / np.sum(wu)
         zu = np.mean(wu)
@@ -141,7 +142,7 @@ class RWEnergy:
         self.energies_long = np.repeat(u, self.n)
 
         # Algorithm runs until we have explored `niter` energies.
-        while len(energies) < niter:
+        while len(self.energies) < self.niter:
 
             # Propose new energy candidate. This defines a new contour
             ucand = u + self.scaling * randn()
@@ -170,10 +171,9 @@ class RWEnergy:
                 self.failed_rootfindings += 1
                 self.rejected_energies.append(ucand)
                 continue
-
             # If root-finding successful, store solution. This is a point on the candidate contour.
             xcand = out.x
-            if not self.check_reverse(u, xcand, xu, contour, logp, s, zu, ucand):   # Do reverse check, if needed
+            if not self.check_reverse(u, xcand, xu, contour, logp, s, zu, ucand):   # Do reverse check
                 continue
             ucand = self.U(xcand)                                     # u-value on new contour
             zcand = self.target.pdf(xcand)                            # z-value on new contour
@@ -190,9 +190,8 @@ class RWEnergy:
             zucand = np.mean(wucand) 
 
             # Metropolis-Hastings
-            rhat = (zucand / zu) * np.exp(u - ucand)
-
-            if rand() <= min(1, rhat):
+            logrhat = np.log(zucand) - np.log(zu) + u - ucand
+            if np.log(rand()) < logrhat: # min(1, rhat):
                 # Accept candidate! Now update all the variables
                 u = ucand
                 z = zcand
@@ -220,8 +219,7 @@ class RWEnergy:
             self.weights = np.hstack((self.weights, wu))
             self.normweights = np.hstack((self.normweights, wunorm))
             self.normalizing_constants.append(zu)
-        return self.samples, self.energies, self.weights, self.normweights, self.failed_rootfindings, self.normalizing_constants,
-        self.rejected_energies, self.energies_long, self.failed_reverserootfindings
+        return self.samples, self.energies, self.weights, self.normweights, self.failed_rootfindings, self.normalizing_constants, self.rejected_energies, self.energies_long, self.failed_reverserootfindings
         
     def _compute_clipped_weights(self, samples):
         """Computes the weights using clipping."""
@@ -249,347 +247,18 @@ class RWEnergy:
             self.normalizing_constants.append(zu)
             self.failed_reverserootfindings += 1
             self.rejected_energies_reverse.append(ucand)
-        return False     # Meaning while loop will "continue"
+            return False     # Meaning while loop will "continue"
+        return True
 
+    def approx_expectation(self, func):
+        """Approximates expectations using the samples."""
+        means = []
+        for i in range(self.niter):
+            means.append(
+                np.sum(
+                    func(self.samples[i*self.n:(i*self.n + self.n)]) * self.normweights[i*self.n:(i*self.n + self.n)][:, None],
+                    axis=0
+                )
+            )
+        return np.mean(np.vstack(means), axis=0)
 
-
-def rwm_energy(x, target, scale_func, niter, n=200, scaling=0.1, tol=1.48e-08, a_guess=1.0, clip=5):
-    """Random Walk Metropolis on Energy Density."""
-    # Grab mu, Sigma for simplicity
-    mu, Sigma = target.mean, target.cov
-
-    # Auxiliary Functions
-    U = lambda xy: -target.logpdf(xy)                                                                    # Potential Function
-    logf = lambda xy: 0                                                                                  # Uniform Target Density
-    compute_weight = lambda xy: np.clip(1 / np.linalg.norm((xy - mu) @ inv(Sigma).T, axis=1), a_min=None, a_max=clip) # Computes CLIPPED!!! unnormalized weights
-
-    # Explore initial contour
-    u = U(x)                                                          # u-value of the contour
-    z = target.pdf(x)                                                 # z-value of the contour
-    s = scale_func(z)                                                 # Find optimal scaling using interpolated function
-    logp = lambda xy: logp_scale(xy, s)                               # Proposal function must use optimal scaling
-    contour = RotatedEllipse(mu, Sigma, z)                            # Contour to explore
-    xu = zappa_sampling(x, contour, logf, logp, n, s, tol, a_guess)   # Sample along contour with uniform density & optimal scaling
-    wu = compute_weight(xu)                                           # Compute unnormalized weights
-    wunorm = wu / np.sum(wu)                                          # Compute NORMALIZED weights
-    zu = np.mean(wu)                                                  # Approx normalizing constant with unnormalized weights
-
-    # Housekeeping
-    energies = [u]                                                    # Store visited energies. Will need to check histogram later.
-    samples = xu                                                      # Store first set of contour samples
-    weights = wu                                                      # Store unnormalized weights
-    normweights = wunorm                                              # Store NORMALIZED weights
-    normalizing_constants = [zu]                                      # Store normalizing constants
-    failed_rootfindings = 0                                           # Flag for root-finding
-    rejected_energies = []
-    energies_long = np.repeat(u, n)
-
-    # Keep the algorithm running until we have explored `niter` energies
-    while len(energies) < niter:
-
-        # Propose a new energy candidate. This determines a new contour.
-        ucand = u + scaling * np.random.randn()
-
-        # Attempt to find a point on the new contour. Starting point is the last sample on previous contour.
-        out = root(lambda x: np.array([U(x) -ucand, 0]), xu[-1])
-
-        # If root-finding failed, we stay at the current location. 
-        # Since we stay at the same contour, we sample new points on it
-        # and improve our normalizing constant estimate.
-        if not out.success:
-            # Sample again on the contour & update normalizing constant
-            xunew = zappa_sampling(xu[-1], contour, logf, logp, n, s, tol, a_guess)  # Sample again. Start from last point on this contour. Same optimal scaling.
-            wunew = compute_weight(xunew)                                            # Compute new weights
-            wunewnorm = wunew / np.sum(wunew)                                        # Normalize weights
-            zu = (zu + np.mean(wunew)) / 2                                           # Update normalizing constant. TODO: Check wu, wunew have same length.
-            # Store the new samples, weights & (same) energy
-            weights = np.hstack((weights, wunew))
-            samples = np.vstack((samples, xunew))
-            normweights = np.hstack((normweights, wunewnorm))
-            energies.append(u)
-            energies_long = np.hstack((energies_long, np.repeat(u, n)))
-            normalizing_constants.append(zu)
-            failed_rootfindings += 1
-            rejected_energies.append(ucand)
-            continue
-        
-        # If root-finding successful, store solution. This is a point on the candidate contour.
-        xcand = out.x
-        ucand = U(xcand)                                     # u-value on new contour
-        zcand = target.pdf(xcand)                            # z-value on new contour
-        scand = scale_func(zcand)                            # Optimal scaling on new contour
-        logpcand = lambda xy: logp_scale(xy, scand)          # Proposal function with new optimal scaling
-        contourcand = RotatedEllipse(mu, Sigma, zcand)       # New contour
-
-        # Sample on new contour. Start from root-finding solution. Use optimal scaling & uniform target
-        xucand = zappa_sampling(xcand, contourcand, logf, logpcand, n, scand, tol, a_guess)
-
-        # Unnormalized, normalized weights & approx to normalizing constant of new contour
-        wucand = compute_weight(xucand) 
-        wucandnorm = wucand / np.sum(wucand)
-        zucand = np.mean(wucand) 
-
-        # Metropolis-Hastings
-        rhat = (zucand / zu) * np.exp(u - ucand)
-        if np.random.rand() <= min(1, rhat):
-            # Accept candidate! Now update all the variables
-            u = ucand
-            z = zcand
-            s = scand
-            logp = logpcand
-            contour = contourcand
-            xu = xucand
-            wu = wucand
-            wunorm = wucandnorm
-            zu = zucand
-            # Store new candidate
-            energies.append(ucand)
-            energies_long = np.hstack((energies_long, np.repeat(ucand, n)))
-            samples = np.vstack((samples, xucand))
-            weights = np.hstack((weights, wucand))
-            normweights = np.hstack((normweights, wucandnorm))
-            normalizing_constants.append(zucand)
-        else:
-            # Stay on the current contour. As for unsuccessful root-finding, 
-            # use this opportunity to improve contour exploration.
-            # Sample again on the contour & update normalizing constant
-            xunew = zappa_sampling(xu[-1], contour, logf, logp, n, s, tol, a_guess)  # Sample again. Start from last point on this contour. Same optimal scaling.
-            wunew = compute_weight(xunew)                                            # Compute new weights
-            wunewnorm = wunew / np.sum(wunew)                                        # Normalize weights
-            zu = (zu + np.mean(wunew)) / 2                                           # Update normalizing constant. TODO: Check wu, wunew have same length.
-            # Store the new samples, weights & (same) energy
-            weights = np.hstack((weights, wunew))
-            samples = np.vstack((samples, xunew))
-            normweights = np.hstack((normweights, wunewnorm))
-            energies.append(u)
-            energies_long = np.hstack((energies_long, np.repeat(u, n)))
-            normalizing_constants.append(zu)
-    return samples, energies, weights, normweights, failed_rootfindings, normalizing_constants, rejected_energies, energies_long
-
-
-
-
-def rwm_energy_reversecheck(x, target, scale_func, niter, n=200, scaling=0.1, tol=1.48e-08, a_guess=1.0, clip=5):
-    """Random Walk Metropolis on Energy Density. Here we use a REVERSE CHECK for root finding."""
-    # Grab mu, Sigma for simplicity
-    mu, Sigma = target.mean, target.cov
-
-    # Auxiliary Functions
-    U = lambda xy: -target.logpdf(xy)                                                                    # Potential Function
-    logf = lambda xy: 0                                                                                  # Uniform Target Density
-    compute_weight = lambda xy: np.clip(1 / np.linalg.norm((xy - mu) @ inv(Sigma).T, axis=1), a_min=None, a_max=clip) # Computes CLIPPED!!! unnormalized weights
-
-    # Explore initial contour
-    u = U(x)                                                          # u-value of the contour
-    z = target.pdf(x)                                                 # z-value of the contour
-    s = scale_func(z)                                                 # Find optimal scaling using interpolated function
-    logp = lambda xy: logp_scale(xy, s)                               # Proposal function must use optimal scaling
-    contour = RotatedEllipse(mu, Sigma, z)                            # Contour to explore
-    xu = zappa_sampling(x, contour, logf, logp, n, s, tol, a_guess)   # Sample along contour with uniform density & optimal scaling
-    wu = compute_weight(xu)                                           # Compute unnormalized weights
-    wunorm = wu / np.sum(wu)                                          # Compute NORMALIZED weights
-    zu = np.mean(wu)                                                  # Approx normalizing constant with unnormalized weights
-
-    # Housekeeping
-    energies = [u]                                                    # Store visited energies. Will need to check histogram later.
-    samples = xu                                                      # Store first set of contour samples
-    weights = wu                                                      # Store unnormalized weights
-    normweights = wunorm                                              # Store NORMALIZED weights
-    normalizing_constants = [zu]                                      # Store normalizing constants
-    failed_rootfindings = 0                                           # Flag for root-finding
-    rejected_energies = []
-    rejected_energies_reverse = []
-    energies_long = np.repeat(u, n)
-
-    # Keep the algorithm running until we have explored `niter` energies
-    while len(energies) < niter:
-
-        # Propose a new energy candidate. This determines a new contour.
-        ucand = u + scaling * np.random.randn()
-
-        # Attempt to find a point on the new contour. Starting point is the last sample on previous contour.
-        out = root(lambda x: np.array([U(x) -ucand, 0]), xu[-1])
-
-        # If root-finding failed, we stay at the current location. 
-        # Since we stay at the same contour, we sample new points on it
-        # and improve our normalizing constant estimate.
-        if not out.success:
-            # Sample again on the contour & update normalizing constant
-            xunew = zappa_sampling(xu[-1], contour, logf, logp, n, s, tol, a_guess)  # Sample again. Start from last point on this contour. Same optimal scaling.
-            wunew = compute_weight(xunew)                                            # Compute new weights
-            wunewnorm = wunew / np.sum(wunew)                                        # Normalize weights
-            zu = (zu + np.mean(wunew)) / 2                                           # Update normalizing constant. TODO: Check wu, wunew have same length.
-            # Store the new samples, weights & (same) energy
-            weights = np.hstack((weights, wunew))
-            samples = np.vstack((samples, xunew))
-            normweights = np.hstack((normweights, wunewnorm))
-            energies.append(u)
-            energies_long = np.hstack((energies_long, np.repeat(u, n)))
-            normalizing_constants.append(zu)
-            failed_rootfindings += 1
-            rejected_energies.append(ucand)
-            continue
-
-        
-        # If root-finding successful, store solution. This is a point on the candidate contour.
-        xcand = out.x
-        ucand = U(xcand)                                     # u-value on new contour
-        zcand = target.pdf(xcand)                            # z-value on new contour
-        scand = scale_func(zcand)                            # Optimal scaling on new contour
-        logpcand = lambda xy: logp_scale(xy, scand)          # Proposal function with new optimal scaling
-        contourcand = RotatedEllipse(mu, Sigma, zcand)       # New contour
-
-        # Reverse check: Make sure we can find the previous contour from this one, to check reversibility
-        out2 = root(lambda x: np.array([U(x) -u, 0]), xcand)
-        if not out2.success:
-            # Sample again on the contour & update normalizing constant
-            xunew = zappa_sampling(xu[-1], contour, logf, logp, n, s, tol, a_guess)  # Sample again. Start from last point on this contour. Same optimal scaling.
-            wunew = compute_weight(xunew)                                            # Compute new weights
-            wunewnorm = wunew / np.sum(wunew)                                        # Normalize weights
-            zu = (zu + np.mean(wunew)) / 2                                           # Update normalizing constant. TODO: Check wu, wunew have same length.
-            # Store the new samples, weights & (same) energy
-            weights = np.hstack((weights, wunew))
-            samples = np.vstack((samples, xunew))
-            normweights = np.hstack((normweights, wunewnorm))
-            energies.append(u)
-            energies_long = np.hstack((energies_long, np.repeat(u, n)))
-            normalizing_constants.append(zu)
-            failed_rootfindings += 1
-            rejected_energies_reverse.append(ucand)
-            continue
-
-        # Sample on new contour. Start from root-finding solution. Use optimal scaling & uniform target
-        xucand = zappa_sampling(xcand, contourcand, logf, logpcand, n, scand, tol, a_guess)
-
-        # Unnormalized, normalized weights & approx to normalizing constant of new contour
-        wucand = compute_weight(xucand) 
-        wucandnorm = wucand / np.sum(wucand)
-        zucand = np.mean(wucand) 
-
-        # Metropolis-Hastings
-        rhat = (zucand / zu) * np.exp(u - ucand)
-        if np.random.rand() <= min(1, rhat):
-            # Accept candidate! Now update all the variables
-            u = ucand
-            z = zcand
-            s = scand
-            logp = logpcand
-            contour = contourcand
-            xu = xucand
-            wu = wucand
-            wunorm = wucandnorm
-            zu = zucand
-            # Store new candidate
-            energies.append(ucand)
-            energies_long = np.hstack((energies_long, np.repeat(ucand, n)))
-            samples = np.vstack((samples, xucand))
-            weights = np.hstack((weights, wucand))
-            normweights = np.hstack((normweights, wucandnorm))
-            normalizing_constants.append(zucand)
-        else:
-            # Stay on the current contour. As for unsuccessful root-finding, 
-            # use this opportunity to improve contour exploration.
-            # Sample again on the contour & update normalizing constant
-            xunew = zappa_sampling(xu[-1], contour, logf, logp, n, s, tol, a_guess)  # Sample again. Start from last point on this contour. Same optimal scaling.
-            wunew = compute_weight(xunew)                                            # Compute new weights
-            wunewnorm = wunew / np.sum(wunew)                                        # Normalize weights
-            zu = (zu + np.mean(wunew)) / 2                                           # Update normalizing constant. TODO: Check wu, wunew have same length.
-            # Store the new samples, weights & (same) energy
-            weights = np.hstack((weights, wunew))
-            samples = np.vstack((samples, xunew))
-            normweights = np.hstack((normweights, wunewnorm))
-            energies.append(u)
-            energies_long = np.hstack((energies_long, np.repeat(u, n)))
-            normalizing_constants.append(zu)
-    return samples, energies, weights, normweights, failed_rootfindings, normalizing_constants, rejected_energies, rejected_energies_reverse, energies_long
-
-
-
-
-def rwm_energy_still(x, target, scale_func, niter, n=200, scaling=0.1, tol=1.48e-08, a_guess=1.0, clip=5):
-    """Random Walk Metropolis on Energy Density.
-    KEY DIFFERENCE: THIS VERSION DOES NOT USE ZAPPA WHEN WE ARE REJECTED / ROOT FINDING FAILS."""
-    # Grab mu, Sigma for simplicity
-    mu, Sigma = target.mean, target.cov
-
-    # Auxiliary Functions
-    U = lambda xy: -target.logpdf(xy)                                                                    # Potential Function
-    logf = lambda xy: 0                                                                                  # Uniform Target Density
-    compute_weight = lambda xy: np.clip(1 / np.linalg.norm((xy - mu) @ inv(Sigma).T, axis=1), a_min=None, a_max=clip) # Computes CLIPPED!!! unnormalized weights
-
-    # Explore initial contour
-    u = U(x)                                                          # u-value of the contour
-    z = target.pdf(x)                                                 # z-value of the contour
-    s = scale_func(z)                                                 # Find optimal scaling using interpolated function
-    logp = lambda xy: logp_scale(xy, s)                               # Proposal function must use optimal scaling
-    contour = RotatedEllipse(mu, Sigma, z)                            # Contour to explore
-    xu = zappa_sampling(x, contour, logf, logp, n, s, tol, a_guess)   # Sample along contour with uniform density & optimal scaling
-    wu = compute_weight(xu)                                           # Compute unnormalized weights
-    wunorm = wu / np.sum(wu)                                          # Compute NORMALIZED weights
-    zu = np.mean(wu)                                                  # Approx normalizing constant with unnormalized weights
-
-    # Housekeeping
-    energies = [u]                                                    # Store visited energies. Will need to check histogram later.
-    samples = xu                                                      # Store first set of contour samples
-    weights = wu                                                      # Store unnormalized weights
-    normweights = wunorm                                              # Store NORMALIZED weights
-    normalizing_constants = [zu]                                      # Store normalizing constants
-    failed_rootfindings = 0                                           # Flag for root-finding
-    rejected_energies = []
-    energies_long = np.repeat(u, n)
-
-    # Keep the algorithm running until we have explored `niter` energies
-    while len(energies) < niter:
-
-        # Propose a new energy candidate. This determines a new contour.
-        ucand = u + scaling * np.random.randn()
-
-        # Attempt to find a point on the new contour. Starting point is the last sample on previous contour.
-        out = root(lambda x: np.array([U(x) -ucand, 0]), xu[-1])
-
-        # If root-finding failed, we stay at the current location. 
-        if not out.success:
-            energies.append(u)
-            failed_rootfindings += 1
-            continue
-        
-        # If root-finding successful, store solution. This is a point on the candidate contour.
-        xcand = out.x
-        ucand = U(xcand)                                     # u-value on new contour
-        zcand = target.pdf(xcand)                            # z-value on new contour
-        scand = scale_func(zcand)                            # Optimal scaling on new contour
-        logpcand = lambda xy: logp_scale(xy, scand)          # Proposal function with new optimal scaling
-        contourcand = RotatedEllipse(mu, Sigma, zcand)       # New contour
-
-        # Sample on new contour. Start from root-finding solution. Use optimal scaling & uniform target
-        xucand = zappa_sampling(xcand, contourcand, logf, logpcand, n, scand, tol, a_guess)
-
-        # Unnormalized, normalized weights & approx to normalizing constant of new contour
-        wucand = compute_weight(xucand) 
-        wucandnorm = wucand / np.sum(wucand)
-        zucand = np.mean(wucand) 
-
-        # Metropolis-Hastings
-        rhat = (zucand / zu) * np.exp(u - ucand)
-        if np.random.rand() <= min(1, rhat):
-            # Accept candidate! Now update all the variables
-            u = ucand
-            z = zcand
-            s = scand
-            logp = logpcand
-            contour = contourcand
-            xu = xucand
-            wu = wucand
-            wunorm = wucandnorm
-            zu = zucand
-            # Store new candidate
-            energies.append(ucand)
-            energies_long = np.hstack((energies_long, np.repeat(ucand, n)))
-            samples = np.vstack((samples, xucand))
-            weights = np.hstack((weights, wucand))
-            normweights = np.hstack((normweights, wucandnorm))
-            normalizing_constants.append(zucand)
-        else:
-            # Stay on the current contour. 
-            energies.append(u)
-    return samples, energies, weights, normweights, failed_rootfindings, rejected_energies

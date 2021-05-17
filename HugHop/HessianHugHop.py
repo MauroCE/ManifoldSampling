@@ -88,7 +88,7 @@ class HugHopPC:
 
     def HopKernelH(self, x, A, Sx):
         """
-        Standard Hop Kernel with no preconditioning. This is ONE STEP of the hop kernel.
+        Hop Kernel with preconditioning. This is ONE STEP of the hop kernel.
         Returns a tuple (x, a) where x is the new sample, and a is a binary flag indicating 
         successful acceptance (a=1) or rejection (a=0).
 
