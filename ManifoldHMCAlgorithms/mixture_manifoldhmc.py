@@ -1,6 +1,7 @@
 import numpy as np
 from scipy.stats import multivariate_normal
 from Zappa.zappa import zappa_sampling, zappa_adaptive, zappa_adaptive_returnscale, zappa_persistent
+from Zappa.zappa import zappa_projectv, zappa_projectv_adaptive
 from HMC.gaussian_hmc import GaussianTargetHMC
 from Manifolds.RotatedEllipse import RotatedEllipse
 from utils import logf_Jacobian
@@ -78,55 +79,16 @@ def MixtureManifoldHMC(x0, alpha, N, n, m, Sigma, mu, T, epsilon, M, s=0.5, tol=
 
 
 
-def MixtureManifoldHMCPersistent(x0, alpha, N, n, m, Sigma, mu, T, epsilon, M, s=0.5, tol=1.48e-08, a_guess=1):
+def MixtureManifoldHMCProjectv(x0, alpha, N, n, m, Sigma, mu, T, epsilon, M, s=0.5, tol=1.48e-08, a_guess=1, refreshrate=0.1):
     """
-    In this version of ManifoldHMC we use a mixture kernel. PERSISTENT VERSION OF ZAPPA.
+    Mixture Manifold HMC with Zappa projecting velocity onto tangent space. (Lelievre)
     With probability alpha we choose n steps of HMC, with probability (1 - alpha) we choose 
     m Zappa steps. Notice that here n is the number of HMC samples at each "iteration".
     Total number of samples is N.
-    
-    x0 : Numpy Array
-         Initial vector (2, ) where we start our algorithm. Equivalently, could be thought of q0.
-
-    alpha : Float
-            Probability (must be between 0 and 1) of using the HMC kernel. 1 - alpha is the probability
-            of using the Zappa kernel.
-
-    N : Int
-        Total number of samples
-         
-    n : Int
-        Number of HMC samples at each iteration.
-        
-    m : Int
-        Number of manifold sampling steps on each contour.
-    
-    Sigma : Numpy Array
-            Covariance matrix (2,2) of target distribution (which is Gaussian).
-    mu : Numpy Array
-         Mean vector (2, ) of target distribution.
-         
-    T : Float
-        Total integration time for Leapfrog Step.
-        
-    epsilon : Float
-              Step size for Leapfrog step.
-              
-    M : Numpy Array
-        Covariance matrix (2, 2) of momentum distribution (which is Gaussian).
-        
-    s : Float
-        Scale for tangent sampling of Zappa algorithm.
-        
-    tol : Float
-          Tolerance for Zappa algorithm
-          
-    a_guess : Float
-              Initial guess for projection in Zappa algorithm
     """
     target = multivariate_normal(mean=mu, cov=Sigma)
     logf = lambda xy: logf_Jacobian(xy, Sigma)
-    logp = lambda xy: logpexp_scale(xy, s)
+    logp = lambda xy: logp_scale(xy, s)
     x, z = x0, target.pdf(x0)
     samples = x
     while len(samples) < N: 
@@ -137,7 +99,7 @@ def MixtureManifoldHMCPersistent(x0, alpha, N, n, m, Sigma, mu, T, epsilon, M, s
             
         # With probability 1 - alpha do m steps of Zappa's algorithm
         else:
-            new_samples = zappa_persistent(x, RotatedEllipse(mu, Sigma, z), logf, logp, m, s, tol, a_guess)
+            new_samples = zappa_projectv(x, RotatedEllipse(mu, Sigma, z), logf, logp, m, s, tol, a_guess, refreshrate)
             
         samples = np.vstack((samples, new_samples))
         x = new_samples[-1]
@@ -171,6 +133,8 @@ def MHMC_AdaptiveNoKernel(x0, alpha, N, n, m, Sigma, mu, T, epsilon, M, s=0.5, t
         x = new_samples[-1]
         z = target.pdf(x)
     return samples
+
+
 
 
 
