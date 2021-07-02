@@ -44,6 +44,28 @@ def quick_3d_scatter(samples):
     )
     fig.show()
 
+
+def quick_3d_scatters(samples, labels, size=1.0, opacity=0.8):
+    """
+    Multiple 3D scatter plots in the same figure.
+    """
+    fig = go.Figure(
+        data=[
+            go.Scatter3d(
+                x=sample[:,0], 
+                y=sample[:,1], 
+                z=sample[:,2], 
+                mode="markers",
+                name='{}'.format(label),
+                marker=dict(
+                    size=size,
+                    opacity=opacity
+                )) for (sample, label) in zip(samples, labels)
+        ]
+    )
+    fig.show()
+
+
 def quick_MVN_scatter(samples, target, xlims=[-2, 6], ylims=[-3, 5], figsize=(20, 8), lw=5, levels=None, alpha=1.0, zorder=1, colors='gray', step=0.01, return_axes=False):
     """
     Plots 2D samples and contours of MVN.
@@ -62,6 +84,35 @@ def quick_MVN_scatter(samples, target, xlims=[-2, 6], ylims=[-3, 5], figsize=(20
         plt.show()
     else:
         return fig, ax
+
+
+def MVN_scatters(samples_list, target, xlims=[-2, 6], ylims=[-3, 5], figsize=(20, 8), lw=5, levels=None, alpha=1.0, zorder=1, colors='gray', step=0.01, return_axes=False, labels=None):
+    """
+    Plots 2D samples and contours of MVN.
+    """
+    # Grid of points for contour plot
+    x, y = np.mgrid[xlims[0]:xlims[1]:step, ylims[0]:ylims[1]:step]
+    pos = np.dstack((x, y))
+
+    fig, ax = plt.subplots(figsize=figsize)
+    if levels is None:
+        ax.contour(x, y, target.pdf(pos), linewidths=lw) 
+    else:
+        ax.contour(x, y, target.pdf(pos), linewidths=lw, levels=levels, alpha=alpha, zorder=1, colors=colors) 
+    for ix, samples in enumerate(samples_list):
+        if labels is None:
+            ax.scatter(*samples.T)
+        else:
+            ax.scatter(*samples.T, label=labels[ix])
+            ax.legend()
+    if not return_axes:
+        plt.show()
+    else:
+        return fig, ax
+
+
+
+
 
 def quick_MVN_marginals(samples, target, xlims=(-4,4), ylims=(-4,4), figsize=(20,5), n=100, bins=50):
     """
