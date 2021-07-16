@@ -30,8 +30,8 @@ def HugTangential(x0, T, B, n, alpha, q, logpi, grad_log_pi):
         g = grad_log_pi(x)
         g = g / norm(g)
         v = v + (alpha / (1 - alpha)) * g * (g @ v)
-        # Need to compute the density of the tilted proposals
-        if logu <= logpi(x) + q.logpdf(v) - logpi(x0) - q.logpdf(v0):
+        # In the acceptance ratio must use spherical velocities!! Hence v0s and the unsqueezed v
+        if logu <= logpi(x) + q.logpdf(v) - logpi(x0) - q.logpdf(v0s):
             samples = np.vstack((samples, x))
             acceptances[i] = 1         # Accepted!
             x0 = x
