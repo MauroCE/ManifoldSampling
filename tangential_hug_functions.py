@@ -177,3 +177,28 @@ def HugAcceleration(x0, T, B, n, q_sample, logq, logpi, grad_log_pi, Sigma):
             samples = np.vstack((samples, x0))
             acceptances[i] = 0         # Rejected
     return samples, acceptances
+
+
+
+
+
+def GradientHug(x0, delta, q, logpi, grad_log_pi):
+    """
+    gradient wrong Hug Kernel.
+    """
+    v0 = q.rvs()
+    x, v = x0, v0
+    logu = np.log(rand())
+    # Move
+    x = x + delta* v/2 
+    # Reflect using negated velocity
+    g = grad_log_pi(x)
+    ghat = g / norm(g)
+    v = - v - 2*(- v @ ghat) * ghat
+    # Move
+    x = x + delta*v/2
+
+    if logu <= logpi(x) + q.logpdf(v) - logpi(x0) - q.logpdf(v0):
+        return x, 1    # Accepted
+    else:
+        return x0, 0 # Rejected
