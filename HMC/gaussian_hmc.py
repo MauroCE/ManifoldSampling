@@ -1,5 +1,5 @@
 import numpy as np
-from numpy.linalg import inv
+from numpy.linalg import inv, solve
 from scipy.stats import multivariate_normal
 
 
@@ -34,6 +34,7 @@ class GaussianTargetHMC:
         """
         # Store variables
         self.q0 = q0
+        self.d = len(q0)   # Dimension of samples
         self.n = n
         self.M = M
         self.Minv = np.linalg.inv(self.M)
@@ -49,7 +50,7 @@ class GaussianTargetHMC:
         q : Numpy Array
             Position at which we want to evaluate the derivative.
         """
-        return inv(self.Sigma) @ (q - self.mu)
+        return solve(self.Sigma, q - self.mu)
     
     def leapfrog(self, q, p):
         """
@@ -86,7 +87,7 @@ class GaussianTargetHMC:
         A Numpy Array of size (n + 1, 2) containing q0 at index 0 and then the n samples.
         """
         # Store all samples here
-        samples = np.zeros((self.n + 1, 2))
+        samples = np.zeros((self.n + 1, self.d))
         samples[0] = self.q0
         
         # Uniforms for MH correction
@@ -94,11 +95,11 @@ class GaussianTargetHMC:
         
         # Store distributions (target and momentum distribution)
         target = multivariate_normal(mean=self.mu, cov=self.Sigma)
-        momdis = multivariate_normal(mean=np.zeros(2), cov=self.M)
+        momdis = multivariate_normal(mean=np.zeros(self.d), cov=self.M)
         H = lambda q, p : -target.logpdf(q) - momdis.logpdf(p)
 
         # Sample momentum. Must have same dimension as q, i.e. 2D here
-        ps = momdis.rvs(self.n).reshape(-1, 2)     # (n, 2). 
+        ps = momdis.rvs(self.n).reshape(-1, self.d)     # (n, 2). 
         # Reshape(-1, 2) does nothing when n>1. For n=1 we make sure its (1, 2) rather than (2,) so that enumerate works
 
         # For every sample do leapfrog integration and MH correction

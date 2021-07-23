@@ -6,6 +6,7 @@ from numpy.linalg import norm, inv
 import matplotlib.pyplot as plt
 from scipy.stats import gaussian_kde
 from scipy.stats import expon
+from oct2py import octave
 
 
 def logf(xyz):
@@ -136,6 +137,31 @@ def quick_MVN_marginals(samples, target, xlims=(-4,4), ylims=(-4,4), figsize=(20
     plt.show()
 
 
+
+def quick_MGM_marginals(samples, target, xlims=(-4,4), ylims=(-4,4), figsize=(20,5), n=100, bins=50):
+    """
+    Plots marginals.
+    """
+    marginal_x = lambda x: scipy.stats.norm(loc=target.mean[0], scale=np.sqrt(target.cov[0, 0])).pdf(x)
+    marginal_y = lambda y: scipy.stats.norm(loc=target.mean[1], scale=np.sqrt(target.cov[1, 1])).pdf(y)
+
+    x = np.linspace(xlims[0], xlims[1], num=n)
+    y = np.linspace(ylims[0], ylims[1], num=n)
+
+    fig, ax = plt.subplots(ncols=2, figsize=figsize)
+    # X marginal
+    ax[0].plot(x, marginal_x(x))
+    _ = ax[0].hist(samples[:, 0], density=True, bins=bins)
+    #ax[0].set_aspect("equal")
+    # Y marginal
+    ax[1].plot(y, marginal_y(y))
+    _ = ax[1].hist(samples[:, 1], density=True, bins=bins)
+    #ax[1].set_aspect("equal")
+    plt.show()
+
+
+
+
 def quick_MVN_marginals_kde(samples, target, lims=(-4, 4), figsize=(20, 5), n=100, bins=50):
     """
     Plots KDE.
@@ -218,3 +244,37 @@ def angle_between(v1, v2):
     v1_u = normalize(v1)
     v2_u = normalize(v2)
     return np.arccos(np.clip(np.dot(v1_u, v2_u), -1.0, 1.0))
+
+
+def covariance(samples):
+    """Computes covariance between samples."""
+    X = samples - np.mean(samples, axis=0)
+    return X.T @ X / (samples.shape[0] - 1)
+
+
+
+ESS = lambda samples: octave.multiESS(samples, [], "sqroot")
+
+
+def quick_MVN_marginals_kdes(sample_list, target, labels, lims=(-4, 4), figsize=(20, 5), n=100):
+    """
+    Plots KDE.
+    """
+    # True Marginals
+    marginal_x = lambda x: scipy.stats.norm(loc=target.mean[0], scale=np.sqrt(target.cov[0, 0])).pdf(x)
+    marginal_y = lambda y: scipy.stats.norm(loc=target.mean[1], scale=np.sqrt(target.cov[1, 1])).pdf(y)
+    # Data for plot
+    x = np.linspace(lims[0], lims[1], num=n)
+    # plot
+    fig, ax = plt.subplots(ncols=2, figsize=figsize)
+    ax[0].plot(x, marginal_x(x))
+    ax[1].plot(x, marginal_y(x))
+    for ix, samples in enumerate(sample_list):
+        # KDE estimators
+        xkde = gaussian_kde(samples[:, 0])
+        ykde = gaussian_kde(samples[:, 1])
+        # Add to plot
+        ax[0].plot(x, xkde(x), label=labels[ix])
+        ax[1].plot(x, ykde(x), label=labels[ix])
+    plt.legend()
+    plt.show()
