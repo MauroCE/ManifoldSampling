@@ -275,6 +275,7 @@ def quick_MVN_marginals_kdes(sample_list, target, labels, lims=(-4, 4), figsize=
         ykde = gaussian_kde(samples[:, 1])
         # Add to plot
         ax[0].plot(x, xkde(x), label=labels[ix])
+        ax[0].legend()
         ax[1].plot(x, ykde(x), label=labels[ix])
-    plt.legend()
+        ax[1].legend()
     plt.show()

@@ -3,17 +3,19 @@ from numpy.linalg import norm, solve, cholesky, det
 from scipy.linalg import solve_triangular
 from numpy.random import rand
 from scipy.stats import multivariate_normal
+from Manifolds.RotatedEllipse import RotatedEllipse
+from Zappa.zappa import zappa_sampling_multivariate
 # numpy version 1.19.5 worked
 
 
-def HugTangential(x0, T, B, n, alpha, q, logpi, grad_log_pi):
+def HugTangential(x0, T, B, N, alpha, q, logpi, grad_log_pi):
     """
     Spherical Hug. Notice that it doesn't matter whether we use the gradient of pi or 
     grad log pi to tilt the velocity.
     """
     # Grab dimension, initialize storage for samples & acceptances
-    samples, acceptances = x0, np.zeros(n)
-    for i in range(n):
+    samples, acceptances = x0, np.zeros(N)
+    for i in range(N):
         v0s = q.rvs()                    # Draw velocity spherically
         g = grad_log_pi(x0)              # Compute gradient at x0
         g = g / norm(g)                  # Normalize
@@ -43,12 +45,51 @@ def HugTangential(x0, T, B, n, alpha, q, logpi, grad_log_pi):
     return samples[1:], acceptances
 
 
-def Hug(x0, T, B, n, q, logpi, grad_log_pi):
+def HugTangentialPC(x0, T, B, S, N, alpha, q, logpi, grad_log_pi):
+    """
+    Spherical Hug. Notice that it doesn't matter whether we use the gradient of pi or 
+    grad log pi to tilt the velocity.
+    """
+    # Grab dimension, initialize storage for samples & acceptances
+    samples, acceptances = x0, np.zeros(N)
+    for i in range(N):
+        v0s = q.rvs()                    # Draw velocity spherically
+        g = grad_log_pi(x0)              # Compute gradient at x0
+        Sg = S(x0) @ g
+        v0 = v0s - alpha * (g @ v0s) * Sg / (g @ Sg) # Tilt velocity
+        v, x = v0, x0                    # Housekeeping
+        logu = np.log(rand())            # Acceptance ratio
+        delta = T / B                    # Compute step size
+
+        for _ in range(B):
+            x = x + delta*v/2           # Move to midpoint
+            g = grad_log_pi(x)          # Compute gradient at midpoint
+            Sg = S(x) @ g
+            v = v - 2*(v @ g) * Sg / (g @ Sg) # Reflect velocity using midpoint gradient
+            x = x + delta*v/2           # Move from midpoint to end-point
+        # Unsqueeze the velocity
+        g = grad_log_pi(x)
+        Sg = S(x) @ g
+        v = v + (alpha / (1 - alpha)) * (v @ g) * Sg / (g @ Sg)
+        # In the acceptance ratio must use spherical velocities!! Hence v0s and the unsqueezed v
+        if logu <= logpi(x) + q.logpdf(v) - logpi(x0) - q.logpdf(v0s):
+            samples = np.vstack((samples, x))
+            acceptances[i] = 1         # Accepted!
+            x0 = x
+        else:
+            samples = np.vstack((samples, x0))
+            acceptances[i] = 0         # Rejected
+    return samples[1:], acceptances
+
+
+
+
+def Hug(x0, T, B, N, q, logpi, grad_log_pi):
     """
     Standard Hug Kernel.
     """
-    samples, acceptances = x0, np.zeros(n)
-    for i in range(n):
+    samples, acceptances = x0, np.zeros(N)
+    for i in range(N):
         # Draw velocity
         v0 = q.rvs()
         # Housekeeping
@@ -78,13 +119,13 @@ def Hug(x0, T, B, n, q, logpi, grad_log_pi):
     return samples[1:], acceptances
 
 
-def HugPC(x0, T, B, S, n, q, logpi, grad_log_pi):
+def HugPC(x0, T, B, S, N, q, logpi, grad_log_pi):
     """
     Preconditioned Hug Kernel. S is a function that takes a position x and returns
     sample covariance matrix of dimension d. 
     """
-    samples, acceptances = x0, np.zeros(n)
-    for i in range(n):
+    samples, acceptances = x0, np.zeros(N)
+    for i in range(N):
         # Draw velocity
         v0 = q.rvs()
         # Housekeeping
@@ -115,17 +156,17 @@ def HugPC(x0, T, B, S, n, q, logpi, grad_log_pi):
     return samples[1:], acceptances
 
 
-def NoAR(x00, T, B, n, alphas, q_sample, grad_log_pi):
+def NoAR(x00, T, B, N, alphas, q_sample, grad_log_pi):
     """
     Hug and THug without Accept-Reject.
     """
     # Grab dimension
     d = len(x00)
-    v_sphericals = np.vstack([q_sample() for _ in range(n)])
+    v_sphericals = np.vstack([q_sample() for _ in range(N)])
     t_finals = np.zeros((len(alphas), d))
     ### HUG
     x0 = x00
-    for i in range(n):
+    for i in range(N):
         # Draw velocity
         v0 = v_sphericals[i]
         
@@ -149,7 +190,7 @@ def NoAR(x00, T, B, n, alphas, q_sample, grad_log_pi):
     ### THUG
     for ix, alpha in enumerate(alphas):
         x0 = x00
-        for i in range(n):
+        for i in range(N):
             # Draw velocity spherically
             v0s = v_sphericals[i]
             # Compute normalized gradient at x0
@@ -177,13 +218,13 @@ def NoAR(x00, T, B, n, alphas, q_sample, grad_log_pi):
     return h_final, t_finals   # Grab only final point for Hug, grab final points for each α for THUG
 
 
-def HugAcceleration(x0, T, B, n, q_sample, logq, logpi, grad_log_pi, Sigma):
+def HugAcceleration(x0, T, B, N, q_sample, logq, logpi, grad_log_pi, Sigma):
     """
     Hug but doesn't bounce, simply approx the acceleration.
     """
     samples = x0
-    acceptances = np.zeros(n)
-    for i in range(n):
+    acceptances = np.zeros(N)
+    for i in range(N):
         # Draw velocity
         v0 = q_sample()
         
@@ -268,16 +309,21 @@ def HopPC(x, S, lam, k, logpi, grad_log_pi):
     # L @ L.T is equal to S. However, to make calculations easier, we will use
     # L.T.
     # MUST LOOK INTO USING cho_factor and cho_solve.
-    Ax = cholesky(S(x)).T
+    Sx = S(x)
+    ATx = cholesky(Sx)
+    Ax = ATx.T
     # Compute normalized gradient at x
     gx = grad_log_pi(x)
+    gSg = gx @ (Sx @ gx)
+
     # Sample from standard MVN
     u = multivariate_normal(np.zeros(d), np.eye(d)).rvs()
     # Compute new gradient variable f = Ag
     Agx = Ax @ gx
     nAgx = norm(Agx)
-    Au = Ax @ u
-    y = x + ((mu * Au + (lam - mu) * Agx * (Agx @ Au)) / np.sqrt(max(1.0, nAgx**2)))
+    ATu = ATx @ u
+    y = x + ((mu * ATu + (lam - mu) * ATx @ Agx * (gx @ ATu) / gSg) / np.sqrt(max(1.0, nAgx**2)))
+    #y = x + ((mu * Au + (lam - mu) * Agx * (Agx @ Au)) / np.sqrt(max(1.0, nAgx**2)))
     # Compute stuff at y
     gy = grad_log_pi(y)
     # Compute its preconditioned norm
@@ -383,6 +429,16 @@ def run_hug_hop_pc(x0, T, B, S, N, lam, k, q, logpi, grad_log_pi):
         samples, ahug[_], ahop[_] = np.vstack((samples, x_hug, x)), acc_hug, acc_hop
     return samples[1:], ahug, ahop
 
+def run_thug_hop_pc(x0, T, B, S, N, alpha, lam, k, q, logpi, grad_log_pi):
+    """THUG + HOP PRECONDITIONED"""
+    samples = x = x0
+    athug, ahop = np.zeros(N), np.zeros(N)
+    for _ in range(N):
+        x_thug, acc_thug = HugTangentialPC(x, T, B, S, 1, alpha, q, logpi, grad_log_pi)
+        x, acc_hop = HopPC(x_thug.flatten(), S, lam, k, logpi, grad_log_pi)
+        samples, athug[_], ahop[_] = np.vstack((samples, x_thug, x)), acc_thug, acc_hop
+    return samples[1:], athug, ahop
+
 
 def run_hug_gradient(x0, T, B, N, q, logpi, grad_log_pi):
     """HUG + GRADIENT HUG"""
@@ -422,6 +478,17 @@ def run_thug_gradient(x0, T, B, N, alpha, q, logpi, grad_log_pi):
     return samples[1:], athug, aghug
 
 
+def run_thug_gradient_pc(x0, T, B, S, N, alpha, q, logpi, grad_log_pi):
+    """THUG + GRADIENT HUG PRECONDITIONED"""
+    samples = x = x0
+    athug, aghug = np.zeros(N), np.zeros(N)
+    for _ in range(N):
+        x_thug, acc_thug = HugTangentialPC(x, T, B, S, 1, alpha, q, logpi, grad_log_pi)
+        x, acc_ghug = GradientHugPC(x_thug.flatten(), T, B, S, q, logpi, grad_log_pi)
+        samples, athug[_], aghug[_] = np.vstack((samples, x_thug, x)), acc_thug, acc_ghug
+    return samples[1:], athug, aghug
+
+
 def run_hug_gradient_pc(x0, T, B, S, N, q, logpi, grad_log_pi):
     """HUG + GRADIENT HUG PC"""
     samples = x = x0
@@ -431,3 +498,33 @@ def run_hug_gradient_pc(x0, T, B, S, N, q, logpi, grad_log_pi):
         x, acc_ghugpc = GradientHugPC(x_hugpc.flatten(), T, B, S, q, logpi, grad_log_pi)
         samples, ahugpc[_], aghugpc[_] = np.vstack((samples, x_hugpc, x)), acc_hugpc, acc_ghugpc
     return samples[1:], ahugpc, aghugpc
+
+
+def run(kernel1, kernel2, x0, N, args1, args2):
+    """Runs a cycle of kernels with kernel1 and kernel2."""
+    # Sanity check
+    assert args1['logpi'] == args2['logpi']
+    assert args1['grad_log_pi'] == args2['grad_log_pi']
+    # Storage
+    samples = x = x0
+    accept1 = accept2 = np.zeros(N)
+    for _ in range(N):
+        # Cycle kernels
+        y, a1 = kernel1(x, **args1)
+        x, a2 = kernel2(y.flatten(), **args2)
+        # Storage
+        samples, accept1[_], accept2[_] = np.vstack((samples, y, x)), a1, a2
+    return samples[1:], accept1, accept2
+
+
+def cycle_zappa(kernel2, x0, N, target, logf, logp, tol, a_guess, args2):
+    """Runs a cycle of Zappa and kernel 2."""
+    # Storage
+    samples = x = x0
+    for _ in range(N):
+        # Cycle kernels
+        manifold = RotatedEllipse(target.mean, target.cov, target.pdf(x))
+        y = zappa_sampling_multivariate(x, manifold, logf, logp, 1, 1.0, tol, a_guess)
+        x, _ = kernel2(y.flatten(), **args2)
+        samples = np.vstack((samples, y, x))
+    return samples[1:]
