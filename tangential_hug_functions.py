@@ -1,10 +1,13 @@
+from Manifolds.GeneralizedEllipse import GeneralizedEllipse
 import numpy as np
+from numpy.lib.twodim_base import eye
 from numpy.linalg import norm, solve, cholesky, det
 from scipy.linalg import solve_triangular
 from numpy.random import rand
 from scipy.stats import multivariate_normal
 from Manifolds.RotatedEllipse import RotatedEllipse
-from Zappa.zappa import zappa_sampling_multivariate
+from Zappa.zappa import zappa_step_accept, zappa_step_acceptPC
+import time
 # numpy version 1.19.5 worked
 
 
@@ -505,26 +508,49 @@ def run(kernel1, kernel2, x0, N, args1, args2):
     # Sanity check
     assert args1['logpi'] == args2['logpi']
     assert args1['grad_log_pi'] == args2['grad_log_pi']
+    t = time.time()
     # Storage
     samples = x = x0
-    accept1 = accept2 = np.zeros(N)
+    accept1 = np.zeros(N)
+    accept2 = np.zeros(N)
     for _ in range(N):
         # Cycle kernels
         y, a1 = kernel1(x, **args1)
         x, a2 = kernel2(y.flatten(), **args2)
         # Storage
         samples, accept1[_], accept2[_] = np.vstack((samples, y, x)), a1, a2
-    return samples[1:], accept1, accept2
+    return samples[1:], accept1, accept2, time.time() - t
 
 
-def cycle_zappa(kernel2, x0, N, target, logf, logp, tol, a_guess, args2):
+def cycle_zappa(kernel2, x0, N, m, target, p, tol, a_guess, args2):
     """Runs a cycle of Zappa and kernel 2."""
+    t = time.time()
     # Storage
     samples = x = x0
+    accept1 = np.zeros(N)
+    accept2 = np.zeros(N)
     for _ in range(N):
         # Cycle kernels
-        manifold = RotatedEllipse(target.mean, target.cov, target.pdf(x))
-        y = zappa_sampling_multivariate(x, manifold, logf, logp, 1, 1.0, tol, a_guess)
-        x, _ = kernel2(y.flatten(), **args2)
-        samples = np.vstack((samples, y, x))
-    return samples[1:]
+        manifold = GeneralizedEllipse(target.mean, target.cov, target.pdf(x))
+        y, a1 = zappa_step_accept(x, manifold, p, m, tol, a_guess)
+        x, a2 = kernel2(y.flatten(), **args2)
+        samples, accept1[_], accept2[_] = np.vstack((samples, y, x)), a1, a2
+    return samples[1:], accept1, accept2, time.time() - t
+
+
+def cycle_zappaPC(kernel2, x0, N, A, m, target, p, tol, a_guess, args2):
+    """Runs a cycle of ZappaPC and kernel 2."""
+    t = time.time()
+    manifold = GeneralizedEllipse(target.mean, target.cov, target.pdf(x0))
+    d = manifold.get_dimension()  # Dimension of tangent space
+    # Storage
+    samples = x = x0
+    accept1 = np.zeros(N)
+    accept2 = np.zeros(N)
+    for _ in range(N):
+        # Cycle kernels
+        manifold = GeneralizedEllipse(target.mean, target.cov, target.pdf(x))
+        y, a1 = zappa_step_acceptPC(x, manifold, p, A, m, tol, a_guess)
+        x, a2 = kernel2(y.flatten(), **args2)
+        samples, accept1[_], accept2[_] = np.vstack((samples, y, x)), a1, a2
+    return samples[1:], accept1, accept2, time.time() - t

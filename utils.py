@@ -2,7 +2,7 @@ from scipy.stats import multivariate_normal
 import scipy
 import numpy as np
 import plotly.graph_objects as go
-from numpy.linalg import norm, inv
+from numpy.linalg import norm, inv, solve
 import matplotlib.pyplot as plt
 from scipy.stats import gaussian_kde
 from scipy.stats import expon
@@ -189,12 +189,12 @@ def normalize(x):
     return x / np.sqrt(np.sum(x**2))
 
 
-def logf_Jacobian(xy, Sigma):
+def logf_Jacobian(xy, Sigma, mu):
     """
     1 / Jacobian of log pi
     """
-    return np.log(1 / norm(inv(Sigma) @ xy)) # 1 / norm(inv(Sigma) @ xy)
-
+    return - np.log(norm(solve(Sigma, xy - mu)))
+    
 
 def prep_contour(xlims, ylims, step, func):
     x = np.arange(*xlims, step)

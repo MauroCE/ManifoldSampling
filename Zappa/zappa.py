@@ -3,7 +3,7 @@ Simple, Efficient Zappa sampling. Returns samples only.
 """
 import numpy as np
 from numpy.random import randn, rand, exponential
-from numpy.linalg import svd
+from numpy.linalg import svd, solve
 from numpy import log, zeros
 import matplotlib.pyplot as plt
 from numpy import pi
@@ -108,6 +108,159 @@ def zappa_sampling_multivariate(x0, manifold, logf, logp, n, sigma, tol, a_guess
         i += 1
 
     return samples
+
+
+
+def zappa_step_accept(x0, manifold, p, n, tol, a_guess, maxiter=50):
+    """
+    Samples using Zappa.
+    """
+    # Check arguments
+    n = int(n)
+    d, m = manifold.get_dimension(), manifold.get_codimension()
+    logf = lambda xy: - log(np.linalg.norm(manifold.Q(xy)))
+
+    # Initial point on the manifold
+    x = x0
+
+    # House-keeping
+    samples = zeros((n, d + m))    # Store n samples on the manifold
+    accept = zeros(n)
+    i = 0
+
+    # Log-uniforms for MH accept-reject step
+    logu = log(rand(n))
+
+    # Do First Step
+    Qx = manifold.Q(x)                       # Gradient at x.                             Size: (d + m, )
+    tx_basis = manifold.tangent_basis(Qx)    # ON basis for tangent space at x using SVD  Size: (d + m, d)
+
+    # Run until you get n samples
+    while i < n:
+
+        # Sample along tangent 
+        v_sample = p.rvs().reshape([-1])        # Isotropic MVN with scaling sigma         Size: (d, )
+        v = tx_basis @ v_sample    # Linear combination of the basis vectors  Size: (d + m, )
+
+        # Forward Projection
+        a, flag = project_multivariate(x, v, Qx, manifold.q, tol, a_guess, maxiter)
+        if flag == 0:                                  # Projection failed
+            samples[i, :] = x                          # Stay at x
+            accept[i] = 0
+            i += 1
+            continue
+        y = x + v + Qx @ a                             # Projected point (d + m, )
+
+        # Compute v' from y
+        Qy = manifold.Q(y)                         # Gradient at y.                            Size: (d + m, )
+        ty_basis = manifold.tangent_basis(Qy)      # ON basis for tangent space at y using SVD Size: (d + m, d)
+        v_prime_sample = (x - y) @ ty_basis  # Components along tangent                  Size: (d + m, )
+
+        # Metropolis-Hastings
+        if logu[i] > logf(y) + p.logpdf(v_prime_sample) - logf(x) - p.logpdf(v_sample):
+            samples[i, :] = x     # Reject. Stay at x
+            accept[i] = 0
+            i += 1
+            continue
+
+        # Backward Projection
+        v_prime = v_prime_sample @ ty_basis.T   # Linear combination of the basis vectors. Size: (d + m, )
+        _, flag = project_multivariate(y, v_prime, Qy, manifold.q, tol, a_guess, maxiter)
+        if flag == 0:
+            samples[i, :] = x     # projection failed, stay at x
+            accept[i] = 0
+            i += 1
+            continue
+
+        # Accept move x --> y
+        accept[i] = 1
+        x = y
+        samples[i, :] = x
+        Qx = Qy                # Store gradient
+        tx_basis = ty_basis    # Store tangent basis
+        i += 1
+
+    return samples, accept
+
+
+def zappa_step_acceptPC(x0, manifold, p, A, n, tol, a_guess, maxiter=50):
+    """
+    Samples using Zappa.
+    """
+    # Check arguments
+    n = int(n)
+    d, m = manifold.get_dimension(), manifold.get_codimension()
+    logf = lambda xy: - log(np.linalg.norm(A @ manifold.Q(A.T @ xy)))
+
+    # Initial point on the manifold
+    x = solve(A.T, x0)
+
+    # New constraint
+    z_tilde = multivariate_normal(np.zeros(d+m), np.eye(d+m)).pdf(x)
+    q_tilde = lambda xy: np.linalg.norm(xy)**2 + (d+m)*log(2*np.pi) + 2*log(z_tilde)
+
+    # House-keeping
+    samples = zeros((n, d + m))    # Store n samples on the manifold
+    accept = zeros(n)
+    i = 0
+
+    # Log-uniforms for MH accept-reject step
+    logu = log(rand(n))
+
+    # Do First Step
+    Qx = A @ manifold.Q(x)                       # Gradient at x.                             Size: (d + m, )
+    tx_basis = manifold.tangent_basis(Qx)    # ON basis for tangent space at x using SVD  Size: (d + m, d)
+
+    # Run until you get n samples
+    while i < n:
+
+        # Sample along tangent 
+        v_sample = p.rvs().reshape([-1])  # Isotropic MVN with scaling sigma         Size: (d, )
+        v = tx_basis @ v_sample           # Linear combination of the basis vectors  Size: (d + m, )
+
+        
+        # Forward Projection
+        a, flag = project_multivariate(x, v, Qx, q_tilde, tol, a_guess, maxiter)
+        if flag == 0:                                  # Projection failed
+            samples[i, :] = x                          # Stay at x
+            accept[i] = 0
+            i += 1
+            continue
+        y = x + v + Qx @ a                             # Projected point (d + m, )
+
+        # Compute v' from y
+        Qy = A @ manifold.Q(y)                     # Gradient at y.                            Size: (d + m, )
+        ty_basis = manifold.tangent_basis(Qy)      # ON basis for tangent space at y using SVD Size: (d + m, d)
+        v_prime_sample = (x - y) @ ty_basis  # Components along tangent                  Size: (d + m, )
+
+        # Metropolis-Hastings
+        if logu[i] > logf(y) + p.logpdf(v_prime_sample) - logf(x) - p.logpdf(v_sample):
+            samples[i, :] = x     # Reject. Stay at x
+            accept[i] = 0
+            i += 1
+            continue
+
+        # Backward Projection
+        v_prime = v_prime_sample @ ty_basis.T   # Linear combination of the basis vectors. Size: (d + m, )
+        _, flag = project_multivariate(y, v_prime, Qy, q_tilde, tol, a_guess, maxiter)
+        if flag == 0:
+            samples[i, :] = x     # projection failed, stay at x
+            accept[i] = 0
+            i += 1
+            continue
+
+        # Accept move x --> y
+        accept[i] = 1
+        x = y
+        samples[i, :] = x
+        Qx = Qy                # Store gradient
+        tx_basis = ty_basis    # Store tangent basis
+        i += 1
+
+    # At the end, we must transform them back
+    samples = samples @ A   # samples @ (A.T).T as it would be A.T @ xy
+    return samples, accept
+
 
 def project_multivariate(x, v, Q, q, tol=None, a_guess=np.zeros(1), maxiter=50):
     """Finds a such that q(x + v + a*Q) = 0"""
