@@ -279,3 +279,17 @@ def quick_MVN_marginals_kdes(sample_list, target, labels, lims=(-4, 4), figsize=
         ax[1].plot(x, ykde(x), label=labels[ix])
         ax[1].legend()
     plt.show()
+
+
+def box_plot(ax, data, edge_color, fill_color, positions, labels=None):
+    bp = ax.boxplot(data, patch_artist=True, positions=positions, widths=0.2)
+    
+    for element in ['boxes', 'whiskers', 'fliers', 'means', 'medians', 'caps']:
+        plt.setp(bp[element], color=edge_color)
+
+    for patch in bp['boxes']:
+        patch.set(facecolor=fill_color)      
+        
+    for patch in bp['fliers']:
+        patch.set(markeredgecolor=edge_color)
+    return bp

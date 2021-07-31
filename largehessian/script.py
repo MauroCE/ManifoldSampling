@@ -238,14 +238,14 @@ def run_hug_hop(N):
     return samples[1:M+1], np.mean(accept1[1:])
 
 
-def run_thug_hop(N):
+def run_thug_hop(N, alpha):
     """Runs M iterations (cycles) of Hug and Hop. N is the number of Hug sub-iterations
     per iteration. In Hug&Hop paper N = 1. """
     samples = x = x0
     accept1 = np.array([0])
     while samples.shape[0] <= M:
         thug_samples, a1 = HugTangential(x, T, B, N, alpha, q, logpi, grad_log_pi)    # N iterations of Hug
-        x, _  = Hop(thug_samples[-1], lam, k, logpi, grad_log_pi)   # 1 iteration of Hop
+        x, _  = Hop(thug_samples[-1], lam, kappa, logpi, grad_log_pi)   # 1 iteration of Hop
         samples = vstack((samples, thug_samples, x))             # Store N + 1 samples
         accept1 = hstack((accept1, a1))
     return samples[1:M+1], np.mean(accept1[1:])
@@ -254,7 +254,7 @@ def run_thug_hop(N):
 # Target Distribution
 d = 2
 mu = zeros(d)
-scale = 0.05
+scale = 0.005
 Sigma0 = diag([1.0, 5.0])
 Sigma = scale * Sigma0
 target = multivariate_normal(mu, Sigma)
@@ -266,35 +266,36 @@ x0 = target.rvs()
 # Settings
 T = 5.0              # Total integration time for HUG/THUG
 B = 5                # Number of bounces per HUG/THUG step
-M = 20000            # Number of kernel iterations
+M = 10000            # Number of kernel iterations
 n_runs = 10
 lam = 2.0            # \lambda parameter for HOP
-k = 0.25             # \kappa parameter for HOP
-alpha = 0.5
+kappa = 0.25             # \kappa parameter for HOP
+alphas = [0.1, 0.3, 0.5, 0.7, 0.9]
 Ns = [1, 10] #, 30, 50, 70, 100]
 
-ESS_THUG = zeros((n_runs, len(Ns)))
-ESS_logpi_THUG = zeros((n_runs, len(Ns)))
-ESS_comp1_THUG = zeros((n_runs, len(Ns)))
-ESS_comp2_THUG = zeros((n_runs, len(Ns)))
+ESS_THUG = zeros((n_runs, len(Ns), len(alphas)))
+ESS_logpi_THUG = zeros((n_runs, len(Ns), len(alphas)))
+ESS_comp1_THUG = zeros((n_runs, len(Ns), len(alphas)))
+ESS_comp2_THUG = zeros((n_runs, len(Ns), len(alphas)))
+
 ESS_HUG  = zeros((n_runs, len(Ns)))
 ESS_logpi_HUG = zeros((n_runs, len(Ns)))
 ESS_comp1_HUG = zeros((n_runs, len(Ns)))
 ESS_comp2_HUG = zeros((n_runs, len(Ns)))
-A_THUG = zeros(len(Ns))
+
+A_THUG = zeros((len(Ns), len(alphas)))
 A_HUG  = zeros(len(Ns))
 for j, N in enumerate(Ns):
-    a_thug_running = 0.0
-    a_hug_running = 0.0
     for i in range(n_runs):
-        # THUG
-        t_samples, ta = run_thug_hop(N)
-        ESS_THUG[i, j] = multiESS(t_samples)
-        ESS_logpi_THUG[i, j] = tfp.mcmc.effective_sample_size(target.logpdf(t_samples)).numpy()
-        ess_comps_thug = tfp.mcmc.effective_sample_size(t_samples).numpy()
-        ESS_comp1_THUG[i, j] = ess_comps_thug[0]
-        ESS_comp2_THUG[i, j] = ess_comps_thug[1]
-        a_thug_running += ta / n_runs
+        # THUG for various alphas
+        for k, alpha in enumerate(alphas):
+            t_samples, ta = run_thug_hop(N, alpha)
+            ESS_THUG[i, j, k] = multiESS(t_samples)
+            ESS_logpi_THUG[i, j, k] = tfp.mcmc.effective_sample_size(target.logpdf(t_samples)).numpy()
+            ess_comps_thug = tfp.mcmc.effective_sample_size(t_samples).numpy()
+            ESS_comp1_THUG[i, j, k] = ess_comps_thug[0]
+            ESS_comp2_THUG[i, j, k] = ess_comps_thug[1]
+            A_THUG[j, k] += ta / n_runs
         # HUG
         h_samples, ha = run_hug_hop(N)
         ESS_HUG[i, j] = multiESS(h_samples)
@@ -302,9 +303,7 @@ for j, N in enumerate(Ns):
         ess_comps_hug = tfp.mcmc.effective_sample_size(h_samples).numpy()
         ESS_comp1_HUG[i, j] = ess_comps_hug[0]
         ESS_comp2_HUG[i, j] = ess_comps_hug[1]
-        a_hug_running += ha / n_runs
-    A_THUG[j] = a_thug_running
-    A_HUG[j]  = a_hug_running
+        A_HUG[j] += ha / n_runs
 
 
 save("ESS_THUG.npy", ESS_THUG)
