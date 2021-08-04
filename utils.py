@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from scipy.stats import gaussian_kde
 from scipy.stats import expon
 from oct2py import octave
+import tensorflow_probability as tfp
 
 
 def logf(xyz):
@@ -254,6 +255,8 @@ def covariance(samples):
 
 
 ESS = lambda samples: octave.multiESS(samples, [], "sqroot")
+
+ESS_univariate = lambda samples: tfp.mcmc.effective_sample_size(samples).numpy()
 
 
 def quick_MVN_marginals_kdes(sample_list, target, labels, lims=(-4, 4), figsize=(20, 5), n=100):
