@@ -114,8 +114,6 @@ def MVN_scatters(samples_list, target, xlims=[-2, 6], ylims=[-3, 5], figsize=(20
 
 
 
-
-
 def quick_MVN_marginals(samples, target, xlims=(-4,4), ylims=(-4,4), figsize=(20,5), n=100, bins=50):
     """
     Plots marginals.
@@ -257,6 +255,10 @@ def covariance(samples):
 ESS = lambda samples: octave.multiESS(samples, [], "sqroot")
 
 ESS_univariate = lambda samples: tfp.mcmc.effective_sample_size(samples).numpy()
+
+n_unique = lambda samples: np.unique(samples, axis=0).shape[0]
+
+ESS_times_proportion_unique = lambda samples, axis: ESS_univariate(samples[:, axis]) * (n_unique(samples) / len(samples))
 
 
 def quick_MVN_marginals_kdes(sample_list, target, labels, lims=(-4, 4), figsize=(20, 5), n=100):

@@ -8,12 +8,13 @@ from scipy.stats import multivariate_normal
 from Manifolds.RotatedEllipse import RotatedEllipse
 from Zappa.zappa import zappa_step_accept, zappa_step_acceptPC
 import time
+from numpy.random import uniform
 # numpy version 1.19.5 worked
 
 
 def HugTangential(x0, T, B, N, alpha, q, logpi, grad_log_pi):
     """
-    Spherical Hug. Notice that it doesn't matter whether we use the gradient of pi or 
+    Tangential Hug. Notice that it doesn't matter whether we use the gradient of pi or 
     grad log pi to tilt the velocity.
     """
     # Grab dimension, initialize storage for samples & acceptances
@@ -46,6 +47,304 @@ def HugTangential(x0, T, B, N, alpha, q, logpi, grad_log_pi):
             samples = np.vstack((samples, x0))
             acceptances[i] = 0         # Rejected
     return samples[1:], acceptances
+
+
+def HugTangentialAR(x0, T, B, N, alpha, prob, q, logpi, grad_log_pi):
+    """
+    Non-reversible Tangential Hug. At every iteration we sample a variable
+    w ~ U(0, 1) and with probability prob = 0.75 we use an AR process with \rho=1
+    (i.e. we keep exactly the previous velocity). Otherwise we use an AR process 
+    with \rho=0 (i.e. we completely refresh the velocity). The AR process is
+            V_{t+1} = \rho V_t + \sqrt{1 - \rho^2} W_t
+    where V_t is the previous velocity, W_t ~ N(0, 1) and |\rho| <= 1.
+    > At the moment, I am doing the AR process on the spherical velocity.
+    """
+    # Grab dimension, initialize storage for samples & acceptances
+    samples, acceptances = x0, np.zeros(N)
+    # Before starting, sample a spherical velocity
+    v0s = q.rvs()
+    for i in range(N):
+        # With probability prob keep the same velocity, otherwise refresh completely
+        if uniform() > prob: 
+            v0s = q.rvs()
+        g = grad_log_pi(x0)              # Compute gradient at x0
+        g = g / norm(g)                  # Normalize
+        v0 = v0s - alpha * g * (g @ v0s) # Tilt velocity
+        v, x = v0, x0                    # Housekeeping
+        logu = np.log(rand())            # Acceptance ratio
+        delta = T / B                    # Compute step size
+
+        for _ in range(B):
+            x = x + delta*v/2           # Move to midpoint
+            g = grad_log_pi(x)          # Compute gradient at midpoint
+            ghat = g / norm(g)          # Normalize 
+            v = v - 2*(v @ ghat) * ghat # Reflect velocity using midpoint gradient
+            x = x + delta*v/2           # Move from midpoint to end-point
+        # Unsqueeze the velocity
+        g = grad_log_pi(x)
+        g = g / norm(g)
+        vs = v + (alpha / (1 - alpha)) * g * (g @ v)
+        # In the acceptance ratio must use spherical velocities!! Hence v0s and the unsqueezed v
+        if logu <= logpi(x) + q.logpdf(vs) - logpi(x0) - q.logpdf(v0s):
+            samples = np.vstack((samples, x))
+            acceptances[i] = 1         # Accepted!
+            x0 = x
+            # IMPORTANT: Notice that we do not save the tilted velocity because
+            # we need to tilt it with the NEW GRADIENT!!
+        else:
+            samples = np.vstack((samples, x0))
+            acceptances[i] = 0         # Rejected
+            # Upon rejection, I need to negate the velocity
+            v0s = -v0s
+    return samples[1:], acceptances
+
+
+
+def HugTangentialARrho(x0, T, B, N, alpha, rho, q, logpi, grad_log_pi):
+    """
+    Non-reversible Tangential Hug. Here we use the full AR process.
+    """
+    # Grab dimension, initialize storage for samples & acceptances
+    samples, acceptances = x0, np.zeros(N)
+    # Before starting, sample a spherical velocity
+    v0s = q.rvs()
+    for i in range(N):
+        # With probability prob keep the same velocity, otherwise refresh completely
+        v0s = rho*v0s + np.sqrt(1 - rho**2)*q.rvs()
+        g = grad_log_pi(x0)              # Compute gradient at x0
+        g = g / norm(g)                  # Normalize
+        v0 = v0s - alpha * g * (g @ v0s) # Tilt velocity
+        v, x = v0, x0                    # Housekeeping
+        logu = np.log(rand())            # Acceptance ratio
+        delta = T / B                    # Compute step size
+
+        for _ in range(B):
+            x = x + delta*v/2           # Move to midpoint
+            g = grad_log_pi(x)          # Compute gradient at midpoint
+            ghat = g / norm(g)          # Normalize 
+            v = v - 2*(v @ ghat) * ghat # Reflect velocity using midpoint gradient
+            x = x + delta*v/2           # Move from midpoint to end-point
+        # Unsqueeze the velocity
+        g = grad_log_pi(x)
+        g = g / norm(g)
+        vs = v + (alpha / (1 - alpha)) * g * (g @ v)
+        # In the acceptance ratio must use spherical velocities!! Hence v0s and the unsqueezed v
+        if logu <= logpi(x) + q.logpdf(vs) - logpi(x0) - q.logpdf(v0s):
+            samples = np.vstack((samples, x))
+            acceptances[i] = 1         # Accepted!
+            x0 = x
+            # IMPORTANT: Notice that we do not save the tilted velocity because
+            # we need to tilt it with the NEW GRADIENT!!
+        else:
+            samples = np.vstack((samples, x0))
+            acceptances[i] = 0         # Rejected
+            # Upon rejection, I need to negate the velocity
+            v0s = -v0s
+    return samples[1:], acceptances
+
+
+def compare_HUG_THUG_THUGAR(x00, T, B, N, alpha, prob, q, logpi, grad_log_pi):
+    """Compares the three algorithms using same noise."""
+    velocities = q.rvs(N)
+    logus = np.log(rand(N))
+    #### HUG
+    x0 = x00
+    hug, ahug = x0, np.zeros(N)
+    for i in range(N):
+        # Draw velocity
+        v0 = velocities[i]
+        # Housekeeping
+        v, x = v0, x0
+        # Compute step size
+        delta = T / B
+
+        for _ in range(B):
+            # Move
+            x = x + delta*v/2 
+            # Reflect
+            g = grad_log_pi(x)
+            ghat = g / norm(g)
+            v = v - 2*(v @ ghat) * ghat
+            # Move
+            x = x + delta*v/2
+
+        if logus[i] <= logpi(x) + q.logpdf(v) - logpi(x0) - q.logpdf(v0):
+            hug = np.vstack((hug, x))
+            ahug[i] = 1         # Accepted!
+            x0 = x
+        else:
+            hug = np.vstack((hug, x0))
+            ahug[i] = 0         # Rejected
+    #### THUG
+    x0 = x00
+    thug, athug = x0, np.zeros(N)
+    for i in range(N):
+        v0s = velocities[i]              # Draw velocity spherically
+        g = grad_log_pi(x0)              # Compute gradient at x0
+        g = g / norm(g)                  # Normalize
+        v0 = v0s - alpha * g * (g @ v0s) # Tilt velocity
+        v, x = v0, x0                    # Housekeeping
+        delta = T / B                    # Compute step size
+
+        for _ in range(B):
+            x = x + delta*v/2           # Move to midpoint
+            g = grad_log_pi(x)          # Compute gradient at midpoint
+            ghat = g / norm(g)          # Normalize 
+            v = v - 2*(v @ ghat) * ghat # Reflect velocity using midpoint gradient
+            x = x + delta*v/2           # Move from midpoint to end-point
+        # Unsqueeze the velocity
+        g = grad_log_pi(x)
+        g = g / norm(g)
+        v = v + (alpha / (1 - alpha)) * g * (g @ v)
+        # In the acceptance ratio must use spherical velocities!! Hence v0s and the unsqueezed v
+        if logus[i] <= logpi(x) + q.logpdf(v) - logpi(x0) - q.logpdf(v0s):
+            thug = np.vstack((thug, x))
+            athug[i] = 1         # Accepted!
+            x0 = x
+        else:
+            thug = np.vstack((thug, x0))
+            athug[i] = 0         # Rejected
+    #### THUG-AR
+    x0 = x00
+    thug_ar, athug_ar = x0, np.zeros(N)
+    for i in range(N):
+        # With probability prob keep the same velocity, otherwise refresh completely
+        if uniform() > prob or i==0: 
+            v0s = velocities[i]
+        g = grad_log_pi(x0)              # Compute gradient at x0
+        g = g / norm(g)                  # Normalize
+        v0 = v0s - alpha * g * (g @ v0s) # Tilt velocity
+        v, x = v0, x0                    # Housekeeping
+        delta = T / B                    # Compute step size
+
+        for _ in range(B):
+            x = x + delta*v/2           # Move to midpoint
+            g = grad_log_pi(x)          # Compute gradient at midpoint
+            ghat = g / norm(g)          # Normalize 
+            v = v - 2*(v @ ghat) * ghat # Reflect velocity using midpoint gradient
+            x = x + delta*v/2           # Move from midpoint to end-point
+        # Unsqueeze the velocity
+        g = grad_log_pi(x)
+        g = g / norm(g)
+        vs = v + (alpha / (1 - alpha)) * g * (g @ v)
+        # In the acceptance ratio must use spherical velocities!! Hence v0s and the unsqueezed v
+        if logus[i] <= logpi(x) + q.logpdf(vs) - logpi(x0) - q.logpdf(v0s):
+            thug_ar = np.vstack((thug_ar, x))
+            athug_ar[i] = 1         # Accepted!
+            x0 = x
+            # IMPORTANT: Notice that we do not save the tilted velocity because
+            # we need to tilt it with the NEW GRADIENT!!
+        else:
+            thug_ar = np.vstack((thug_ar, x0))
+            athug_ar[i] = 0         # Rejected
+            # Upon rejection, I need to negate the velocity
+            v0s = -v0s
+    return hug, thug, thug_ar, ahug, athug, athug_ar
+
+
+def compare_HUG_THUG_THUGAR_rho(x00, T, B, N, alpha, rho, q, logpi, grad_log_pi):
+    """Compares the three algorithms using same noise."""
+    velocities = q.rvs(N)
+    logus = np.log(rand(N))
+    #### HUG
+    x0 = x00
+    hug, ahug = x0, np.zeros(N)
+    for i in range(N):
+        # Draw velocity
+        v0 = velocities[i]
+        # Housekeeping
+        v, x = v0, x0
+        # Compute step size
+        delta = T / B
+
+        for _ in range(B):
+            # Move
+            x = x + delta*v/2 
+            # Reflect
+            g = grad_log_pi(x)
+            ghat = g / norm(g)
+            v = v - 2*(v @ ghat) * ghat
+            # Move
+            x = x + delta*v/2
+
+        if logus[i] <= logpi(x) + q.logpdf(v) - logpi(x0) - q.logpdf(v0):
+            hug = np.vstack((hug, x))
+            ahug[i] = 1         # Accepted!
+            x0 = x
+        else:
+            hug = np.vstack((hug, x0))
+            ahug[i] = 0         # Rejected
+    #### THUG
+    x0 = x00
+    thug, athug = x0, np.zeros(N)
+    for i in range(N):
+        v0s = velocities[i]              # Draw velocity spherically
+        g = grad_log_pi(x0)              # Compute gradient at x0
+        g = g / norm(g)                  # Normalize
+        v0 = v0s - alpha * g * (g @ v0s) # Tilt velocity
+        v, x = v0, x0                    # Housekeeping
+        delta = T / B                    # Compute step size
+
+        for _ in range(B):
+            x = x + delta*v/2           # Move to midpoint
+            g = grad_log_pi(x)          # Compute gradient at midpoint
+            ghat = g / norm(g)          # Normalize 
+            v = v - 2*(v @ ghat) * ghat # Reflect velocity using midpoint gradient
+            x = x + delta*v/2           # Move from midpoint to end-point
+        # Unsqueeze the velocity
+        g = grad_log_pi(x)
+        g = g / norm(g)
+        v = v + (alpha / (1 - alpha)) * g * (g @ v)
+        # In the acceptance ratio must use spherical velocities!! Hence v0s and the unsqueezed v
+        if logus[i] <= logpi(x) + q.logpdf(v) - logpi(x0) - q.logpdf(v0s):
+            thug = np.vstack((thug, x))
+            athug[i] = 1         # Accepted!
+            x0 = x
+        else:
+            thug = np.vstack((thug, x0))
+            athug[i] = 0         # Rejected
+    #### THUG-AR
+    x0 = x00
+    thug_ar, athug_ar = x0, np.zeros(N)
+    for i in range(N):
+        # With probability prob keep the same velocity, otherwise refresh completely
+        if i == 0:
+            v0s = velocities[i]
+        else:
+            v0s = rho*v0s + np.sqrt(1 - rho**2)*velocities[i]
+        g = grad_log_pi(x0)              # Compute gradient at x0
+        g = g / norm(g)                  # Normalize
+        v0 = v0s - alpha * g * (g @ v0s) # Tilt velocity
+        v, x = v0, x0                    # Housekeeping
+        delta = T / B                    # Compute step size
+
+        for _ in range(B):
+            x = x + delta*v/2           # Move to midpoint
+            g = grad_log_pi(x)          # Compute gradient at midpoint
+            ghat = g / norm(g)          # Normalize 
+            v = v - 2*(v @ ghat) * ghat # Reflect velocity using midpoint gradient
+            x = x + delta*v/2           # Move from midpoint to end-point
+        # Unsqueeze the velocity
+        g = grad_log_pi(x)
+        g = g / norm(g)
+        vs = v + (alpha / (1 - alpha)) * g * (g @ v)
+        # In the acceptance ratio must use spherical velocities!! Hence v0s and the unsqueezed v
+        if logus[i] <= logpi(x) + q.logpdf(vs) - logpi(x0) - q.logpdf(v0s):
+            thug_ar = np.vstack((thug_ar, x))
+            athug_ar[i] = 1         # Accepted!
+            x0 = x
+            # IMPORTANT: Notice that we do not save the tilted velocity because
+            # we need to tilt it with the NEW GRADIENT!!
+        else:
+            thug_ar = np.vstack((thug_ar, x0))
+            athug_ar[i] = 0         # Rejected
+            # Upon rejection, I need to negate the velocity
+            v0s = -v0s
+    return hug, thug, thug_ar, ahug, athug, athug_ar
+
+
+
+
 
 
 def HugTangentialPC(x0, T, B, S, N, alpha, q, logpi, grad_log_pi):
@@ -120,6 +419,127 @@ def Hug(x0, T, B, N, q, logpi, grad_log_pi):
             samples = np.vstack((samples, x0))
             acceptances[i] = 0         # Rejected
     return samples[1:], acceptances
+
+
+
+def HugStepEJSD(x0, T, B, q, logpi, grad_log_pi):
+    """
+    One step of HUG kernel computing Expected Squared Jump Distace.
+    """
+    # Draw velocity
+    v0 = q.rvs()
+    # Housekeeping
+    v, x = v0, x0
+    # Acceptance ratio
+    logu = np.log(rand())
+    # Compute step size
+    delta = T / B
+
+    for _ in range(B):
+        # Move
+        x = x + delta*v/2 
+        # Reflect
+        g = grad_log_pi(x)
+        ghat = g / norm(g)
+        v = v - 2*(v @ ghat) * ghat
+        # Move
+        x = x + delta*v/2
+    loga = logpi(x) + q.logpdf(v) - logpi(x0) - q.logpdf(v0)  # Log acceptance probability
+    a = min(1.0, np.exp(loga))   # Acceptance probability
+    # ESJD overall
+    ESJD = a * norm(x0 - x)**2
+    # ESJD for gradient and tangent component
+    g0 = grad_log_pi(x0)
+    g0hat = g0 / norm(g0)
+    gx = grad_log_pi(x)
+    gxhat = gx / norm(gx)
+    x0grad = x0 @ g0hat
+    xgrad = x @ gxhat
+    ESJD_GRAD = a * (x0grad- xgrad)**2
+    x0tan = norm(x0 - x0grad * g0hat)
+    xtan = norm(x - xgrad * gxhat)
+    ESJD_TAN = a * (x0tan - xtan)**2
+    if logu <= loga:
+        return x, 1, ESJD, ESJD_GRAD, ESJD_TAN
+    else:
+        return x0, 0, ESJD, ESJD_GRAD, ESJD_TAN
+
+
+def HugTangentialStepEJSD_AR(x0, v0s, v0, T, B, alpha, q, logpi, grad_log_pi):
+    """
+    One step of THUG computing ESJD.
+    """
+    v0s = q.rvs()                    # Draw velocity spherically
+    g0 = grad_log_pi(x0)              # Compute gradient at x0
+    g0 = g0 / norm(g0)                  # Normalize
+    v0 = v0s - alpha * g0 * (g0 @ v0s) # Tilt velocity
+    v, x = v0, x0                    # Housekeeping
+    logu = np.log(rand())            # Acceptance ratio
+    delta = T / B                    # Compute step size
+
+    for _ in range(B):
+        x = x + delta*v/2           # Move to midpoint
+        g = grad_log_pi(x)          # Compute gradient at midpoint
+        ghat = g / norm(g)          # Normalize 
+        v = v - 2*(v @ ghat) * ghat # Reflect velocity using midpoint gradient
+        x = x + delta*v/2           # Move from midpoint to end-point
+    # Unsqueeze the velocity
+    g = grad_log_pi(x)
+    g = g / norm(g)
+    v = v + (alpha / (1 - alpha)) * g * (g @ v)
+    loga = logpi(x) + q.logpdf(v) - logpi(x0) - q.logpdf(v0s)
+    a = min(1.0, np.exp(loga))
+    # Compute EJSD
+    ESJD = a * norm(x0 - x)**2
+    x0grad = x0 @ g0
+    xgrad  = x  @ g
+    ESJD_GRAD = a * (x0grad- xgrad)**2
+    x0tan = norm(x0 - x0grad * g0)
+    xtan = norm(x - xgrad * g)
+    ESJD_TAN = a * (x0tan - xtan)**2
+    if logu <= loga:
+        return x, 1, ESJD, ESJD_GRAD, ESJD_TAN
+    else:
+        return x0, 0, ESJD, ESJD_GRAD, ESJD_TAN
+
+
+
+def HugTangentialStepEJSD(x0, T, B, alpha, q, logpi, grad_log_pi):
+    """
+    One step of THUG computing ESJD.
+    """
+    v0s = q.rvs()                    # Draw velocity spherically
+    g0 = grad_log_pi(x0)              # Compute gradient at x0
+    g0 = g0 / norm(g0)                  # Normalize
+    v0 = v0s - alpha * g0 * (g0 @ v0s) # Tilt velocity
+    v, x = v0, x0                    # Housekeeping
+    logu = np.log(rand())            # Acceptance ratio
+    delta = T / B                    # Compute step size
+
+    for _ in range(B):
+        x = x + delta*v/2           # Move to midpoint
+        g = grad_log_pi(x)          # Compute gradient at midpoint
+        ghat = g / norm(g)          # Normalize 
+        v = v - 2*(v @ ghat) * ghat # Reflect velocity using midpoint gradient
+        x = x + delta*v/2           # Move from midpoint to end-point
+    # Unsqueeze the velocity
+    g = grad_log_pi(x)
+    g = g / norm(g)
+    v = v + (alpha / (1 - alpha)) * g * (g @ v)
+    loga = logpi(x) + q.logpdf(v) - logpi(x0) - q.logpdf(v0s)
+    a = min(1.0, np.exp(loga))
+    # Compute EJSD
+    ESJD = a * norm(x0 - x)**2
+    x0grad = x0 @ g0
+    xgrad  = x  @ g
+    ESJD_GRAD = a * (x0grad- xgrad)**2
+    x0tan = norm(x0 - x0grad * g0)
+    xtan = norm(x - xgrad * g)
+    ESJD_TAN = a * (x0tan - xtan)**2
+    if logu <= loga:
+        return x, 1, ESJD, ESJD_GRAD, ESJD_TAN
+    else:
+        return x0, 0, ESJD, ESJD_GRAD, ESJD_TAN
 
 
 def HugPC(x0, T, B, S, N, q, logpi, grad_log_pi):
