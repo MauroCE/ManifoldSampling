@@ -251,14 +251,20 @@ def covariance(samples):
     return X.T @ X / (samples.shape[0] - 1)
 
 
-
-ESS = lambda samples: octave.multiESS(samples, [], "sqroot")
+def ESS(samples):
+    """Computes multiESS using MATLAB function. Sometimes if the 
+    samples array has 1 unique sample the output will be complex. In that case we return 0.0 instead.
+    Shall I output 1.0 or 0.0? Maybe 0.0 makes more sense?"""
+    ESSval = octave.multiESS(samples, [], "sqroot") 
+    return ESSval #if type(ESSval) == float else 0.0
 
 ESS_univariate = lambda samples: tfp.mcmc.effective_sample_size(samples).numpy()
 
-n_unique = lambda samples: np.unique(samples, axis=0).shape[0]
+def n_unique(samples):
+    return np.unique(samples, axis=0).shape[0]
 
-ESS_times_proportion_unique = lambda samples, axis: ESS_univariate(samples[:, axis]) * (n_unique(samples) / len(samples))
+def ESS_times_proportion_unique(samples, axis):
+    return ESS_univariate(samples[:, axis]) * (n_unique(samples) / len(samples))
 
 
 def quick_MVN_marginals_kdes(sample_list, target, labels, lims=(-4, 4), figsize=(20, 5), n=100):

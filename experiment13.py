@@ -5,7 +5,7 @@ from numpy import zeros, diag, eye, log, sqrt, vstack, mean, save
 from numpy.linalg import solve
 from scipy.stats import multivariate_normal as MVN
 from tangential_hug_functions import Hop, HugStepEJSD, HugTangentialStepEJSD
-from utils import ESS_univariate, ESS
+from utils import ESS_univariate, ESS, n_unique
 from numpy.random import normal
 
 
@@ -93,7 +93,7 @@ if __name__ == "__main__":
     # Settings
     T = 1.5
     B = 5
-    N = 10000
+    N = 50000
     kappa = 0.25
     n_runs = 10
 
@@ -111,6 +111,7 @@ if __name__ == "__main__":
     G_EJSD_HUG = zeros((n_runs, len(epsilons)))           # EJSD for gradient only
     T_EJSD_HUG = zeros((n_runs, len(epsilons)))           # EJSD for tangent only
     A_HOP_HUG  = zeros((n_runs, len(epsilons)))           # Acceptance probability of HOP for HUG.
+    N_UNIQUE_HUG = zeros((n_runs, len(epsilons)))         # Number of unique samples
 
     # THUG
     THETA_ESS_THUG = zeros((n_runs, len(epsilons), len(alphas)))      
@@ -122,7 +123,8 @@ if __name__ == "__main__":
     EJSD_THUG = zeros((n_runs, len(epsilons), len(alphas)))             
     G_EJSD_THUG = zeros((n_runs, len(epsilons), len(alphas)))           
     T_EJSD_THUG = zeros((n_runs, len(epsilons), len(alphas)))
-    A_HOP_THUG = zeros((n_runs, len(epsilons), len(alphas)))           
+    A_HOP_THUG = zeros((n_runs, len(epsilons), len(alphas)))    
+    N_UNIQUE_THUG = zeros((n_runs, len(epsilons), len(alphas)))        
 
 
     for j, epsilon in enumerate(epsilons):
@@ -140,6 +142,7 @@ if __name__ == "__main__":
             EJSD_HUG[i, j] = e
             G_EJSD_HUG[i, j] = eg
             T_EJSD_HUG[i, j] = et
+            N_UNIQUE_HUG[i, j] = n_unique(hug)
 
             # THUG
             for k, alpha in enumerate(alphas):
@@ -154,6 +157,7 @@ if __name__ == "__main__":
                 EJSD_THUG[i, j, k] = e 
                 G_EJSD_THUG[i, j, k] = eg 
                 T_EJSD_THUG[i, j, k] = et
+                N_UNIQUE_THUG[i, j, k] = n_unique(thug)
 
 
     save("experiment13/EPSILONS.npy", epsilons)
@@ -169,6 +173,7 @@ if __name__ == "__main__":
     save("experiment13/G_EJSD_HUG.npy", G_EJSD_HUG)
     save("experiment13/T_EJSD_HUG.npy", T_EJSD_HUG)
     save("experiment13/A_HOP_HUG.npy", A_HOP_HUG)
+    save("experiment13/N_UNIQUE_HUG.npy", N_UNIQUE_HUG)
 
     save("experiment13/THETA_ESS_THUG.npy", THETA_ESS_THUG)
     save("experiment13/U_ESS_THUG.npy", U_ESS_THUG)
@@ -180,3 +185,4 @@ if __name__ == "__main__":
     save("experiment13/G_EJSD_THUG.npy", G_EJSD_THUG)
     save("experiment13/T_EJSD_THUG.npy", T_EJSD_THUG)
     save("experiment13/A_HOP_THUG.npy", A_HOP_THUG)
+    save("experiment13/N_UNIQUE_THUG.npy", N_UNIQUE_THUG)

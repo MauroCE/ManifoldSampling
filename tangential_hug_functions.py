@@ -49,6 +49,48 @@ def HugTangential(x0, T, B, N, alpha, q, logpi, grad_log_pi):
     return samples[1:], acceptances
 
 
+
+def HugTangential_EJSD(x0, T, B, N, alpha, q, logpi, grad_log_pi):
+    """
+    Same as HugTangential but also computes EJSD.
+    """
+    # Grab dimension, initialize storage for samples & acceptances
+    samples, acceptances = x0, np.zeros(N)
+    ejsd = np.zeros(N)
+    for i in range(N):
+        v0s = q.rvs()                    # Draw velocity spherically
+        g = grad_log_pi(x0)              # Compute gradient at x0
+        g = g / norm(g)                  # Normalize
+        v0 = v0s - alpha * g * (g @ v0s) # Tilt velocity
+        v, x = v0, x0                    # Housekeeping
+        logu = np.log(rand())            # Acceptance ratio
+        delta = T / B                    # Compute step size
+
+        for _ in range(B):
+            x = x + delta*v/2           # Move to midpoint
+            g = grad_log_pi(x)          # Compute gradient at midpoint
+            ghat = g / norm(g)          # Normalize 
+            v = v - 2*(v @ ghat) * ghat # Reflect velocity using midpoint gradient
+            x = x + delta*v/2           # Move from midpoint to end-point
+        # Unsqueeze the velocity
+        g = grad_log_pi(x)
+        g = g / norm(g)
+        v = v + (alpha / (1 - alpha)) * g * (g @ v)
+        # In the acceptance ratio must use spherical velocities!! Hence v0s and the unsqueezed v
+        loga = logpi(x) + q.logpdf(v) - logpi(x0) - q.logpdf(v0s)
+        a = min(1.0, np.exp(loga))
+        ejsd[i] = a * norm(x0 - x)**2
+        if logu <= loga:
+            samples = np.vstack((samples, x))
+            acceptances[i] = 1         # Accepted!
+            x0 = x
+        else:
+            samples = np.vstack((samples, x0))
+            acceptances[i] = 0         # Rejected
+    return samples[1:], acceptances, ejsd
+
+
+
 def HugTangentialAR(x0, T, B, N, alpha, prob, q, logpi, grad_log_pi):
     """
     Non-reversible Tangential Hug. At every iteration we sample a variable
@@ -100,12 +142,63 @@ def HugTangentialAR(x0, T, B, N, alpha, prob, q, logpi, grad_log_pi):
 
 
 
+def HugTangentialAR_EJSD(x0, T, B, N, alpha, prob, q, logpi, grad_log_pi):
+    """
+    Same as HugTangentialAR but this also computes the EJSD.
+    """
+    # Grab dimension, initialize storage for samples & acceptances
+    samples, acceptances = x0, np.zeros(N)
+    ejsd = np.zeros(N)
+    # Before starting, sample a spherical velocity
+    v0s = q.rvs()
+    for i in range(N):
+        # With probability prob keep the same velocity, otherwise refresh completely
+        if uniform() > prob: 
+            v0s = q.rvs()
+        g0 = grad_log_pi(x0)              # Compute gradient at x0
+        g0 = g0 / norm(g0)                  # Normalize
+        v0 = v0s - alpha * g0 * (g0 @ v0s) # Tilt velocity
+        v, x = v0, x0                    # Housekeeping
+        logu = np.log(rand())            # Acceptance ratio
+        delta = T / B                    # Compute step size
+
+        for _ in range(B):
+            x = x + delta*v/2           # Move to midpoint
+            g = grad_log_pi(x)          # Compute gradient at midpoint
+            ghat = g / norm(g)          # Normalize 
+            v = v - 2*(v @ ghat) * ghat # Reflect velocity using midpoint gradient
+            x = x + delta*v/2           # Move from midpoint to end-point
+        # Unsqueeze the velocity
+        g = grad_log_pi(x)
+        g = g / norm(g)
+        vs = v + (alpha / (1 - alpha)) * g * (g @ v)
+        # Acceptance probability
+        loga = logpi(x) + q.logpdf(vs) - logpi(x0) - q.logpdf(v0s)
+        a = min(1.0, np.exp(loga))
+        ejsd[i] = a * norm(x0 - x)**2 
+        # In the acceptance ratio must use spherical velocities!! Hence v0s and the unsqueezed v
+        if logu <= loga:
+            samples = np.vstack((samples, x))
+            acceptances[i] = 1         # Accepted!
+            x0 = x
+            # IMPORTANT: Notice that we do not save the tilted velocity because
+            # we need to tilt it with the NEW GRADIENT!!
+        else:
+            samples = np.vstack((samples, x0))
+            acceptances[i] = 0         # Rejected
+            # Upon rejection, I need to negate the velocity
+            v0s = -v0s
+    return samples[1:], acceptances, ejsd
+
+
+
 def HugTangentialARrho(x0, T, B, N, alpha, rho, q, logpi, grad_log_pi):
     """
     Non-reversible Tangential Hug. Here we use the full AR process.
     """
     # Grab dimension, initialize storage for samples & acceptances
     samples, acceptances = x0, np.zeros(N)
+    assert abs(rho) <=1, "You must provide rho with |rho| <= 1."
     # Before starting, sample a spherical velocity
     v0s = q.rvs()
     for i in range(N):
@@ -141,6 +234,56 @@ def HugTangentialARrho(x0, T, B, N, alpha, rho, q, logpi, grad_log_pi):
             # Upon rejection, I need to negate the velocity
             v0s = -v0s
     return samples[1:], acceptances
+
+
+
+
+def HugTangentialARrho_EJSD(x0, T, B, N, alpha, rho, q, logpi, grad_log_pi):
+    """
+    Same as HugTangentialARrho but computes EJSD.
+    """
+    # Grab dimension, initialize storage for samples & acceptances
+    samples, acceptances = x0, np.zeros(N)
+    assert abs(rho) <=1, "You must provide rho with |rho| <= 1."
+    ejsd = 0.0
+    # Before starting, sample a spherical velocity
+    v0s = q.rvs()
+    for i in range(N):
+        # With probability prob keep the same velocity, otherwise refresh completely
+        v0s = rho*v0s + np.sqrt(1 - rho**2)*q.rvs()
+        g = grad_log_pi(x0)              # Compute gradient at x0
+        g = g / norm(g)                  # Normalize
+        v0 = v0s - alpha * g * (g @ v0s) # Tilt velocity
+        v, x = v0, x0                    # Housekeeping
+        logu = np.log(rand())            # Acceptance ratio
+        delta = T / B                    # Compute step size
+
+        for _ in range(B):
+            x = x + delta*v/2           # Move to midpoint
+            g = grad_log_pi(x)          # Compute gradient at midpoint
+            ghat = g / norm(g)          # Normalize 
+            v = v - 2*(v @ ghat) * ghat # Reflect velocity using midpoint gradient
+            x = x + delta*v/2           # Move from midpoint to end-point
+        # Unsqueeze the velocity
+        g = grad_log_pi(x)
+        g = g / norm(g)
+        vs = v + (alpha / (1 - alpha)) * g * (g @ v)
+        # In the acceptance ratio must use spherical velocities!! Hence v0s and the unsqueezed v
+        loga = logpi(x) + q.logpdf(vs) - logpi(x0) - q.logpdf(v0s)
+        a = min(1.0, np.exp(loga))
+        ejsd += (a * norm(x0 - x)**2) / N
+        if logu <= loga:
+            samples = np.vstack((samples, x))
+            acceptances[i] = 1         # Accepted!
+            x0 = x
+            # IMPORTANT: Notice that we do not save the tilted velocity because
+            # we need to tilt it with the NEW GRADIENT!!
+        else:
+            samples = np.vstack((samples, x0))
+            acceptances[i] = 0         # Rejected
+            # Upon rejection, I need to negate the velocity
+            v0s = -v0s
+    return samples[1:], acceptances, ejsd
 
 
 def compare_HUG_THUG_THUGAR(x00, T, B, N, alpha, prob, q, logpi, grad_log_pi):
@@ -344,9 +487,6 @@ def compare_HUG_THUG_THUGAR_rho(x00, T, B, N, alpha, rho, q, logpi, grad_log_pi)
 
 
 
-
-
-
 def HugTangentialPC(x0, T, B, S, N, alpha, q, logpi, grad_log_pi):
     """
     Spherical Hug. Notice that it doesn't matter whether we use the gradient of pi or 
@@ -384,8 +524,6 @@ def HugTangentialPC(x0, T, B, S, N, alpha, q, logpi, grad_log_pi):
     return samples[1:], acceptances
 
 
-
-
 def Hug(x0, T, B, N, q, logpi, grad_log_pi):
     """
     Standard Hug Kernel.
@@ -419,6 +557,125 @@ def Hug(x0, T, B, N, q, logpi, grad_log_pi):
             samples = np.vstack((samples, x0))
             acceptances[i] = 0         # Rejected
     return samples[1:], acceptances
+
+
+def Hug_EJSD(x0, T, B, N, q, logpi, grad_log_pi):
+    """
+    Hug kernel but also outputs EJSD.
+    """
+    samples, acceptances = x0, np.zeros(N)
+    ejsd = np.zeros(N)
+    for i in range(N):
+        # Draw velocity
+        v0 = q.rvs()
+        # Housekeeping
+        v, x = v0, x0
+        # Acceptance ratio
+        logu = np.log(rand())
+        # Compute step size
+        delta = T / B
+
+        for _ in range(B):
+            # Move
+            x = x + delta*v/2 
+            # Reflect
+            g = grad_log_pi(x)
+            ghat = g / norm(g)
+            v = v - 2*(v @ ghat) * ghat
+            # Move
+            x = x + delta*v/2
+        loga = logpi(x) + q.logpdf(v) - logpi(x0) - q.logpdf(v0)
+        a = min(1.0, np.exp(loga))
+        ejsd += (a * norm(x0 - x)**2) / N
+        if logu <= loga:
+            samples = np.vstack((samples, x))
+            acceptances[i] = 1         # Accepted!
+            x0 = x
+        else:
+            samples = np.vstack((samples, x0))
+            acceptances[i] = 0         # Rejected
+    return samples[1:], acceptances, ejsd
+
+
+def HugAR(x0, T, B, N, prob, q, logpi, grad_log_pi):
+    """
+    Hug with degenerate AR process.
+    """
+    samples, acceptances = x0, np.zeros(N)
+    v0 = q.rvs()     # Draw initial spherical velocity
+    for i in range(N):
+        if uniform() > prob:
+            v0 = q.rvs()
+        # Housekeeping
+        v, x = v0, x0
+        # Acceptance ratio
+        logu = np.log(rand())
+        # Compute step size
+        delta = T / B
+
+        for _ in range(B):
+            # Move
+            x = x + delta*v/2 
+            # Reflect
+            g = grad_log_pi(x)
+            ghat = g / norm(g)
+            v = v - 2*(v @ ghat) * ghat
+            # Move
+            x = x + delta*v/2
+
+        if logu <= logpi(x) + q.logpdf(v) - logpi(x0) - q.logpdf(v0):
+            samples = np.vstack((samples, x))
+            acceptances[i] = 1         # Accepted!
+            x0 = x
+        else:
+            samples = np.vstack((samples, x0))
+            acceptances[i] = 0         # Rejected
+            # Since this is a non-reversible algorithm, we must negate the velocity at the end
+            v0 = -v0
+    return samples[1:], acceptances
+
+
+def HugAR_EJSD(x0, T, B, N, prob, q, logpi, grad_log_pi):
+    """
+    Same as HugAR but also outputs EJSD. Notice it outputs the averaged (i.e. Expected)
+    JSD already. Again, this should be used on its own, not with Hop. 
+    """
+    samples, acceptances = x0, np.zeros(N)
+    ejsd = np.zeros(N)
+    v0 = q.rvs()     # Draw initial spherical velocity
+    for i in range(N):
+        if uniform() > prob:
+            v0 = q.rvs()
+        # Housekeeping
+        v, x = v0, x0
+        # Acceptance ratio
+        logu = np.log(rand())
+        # Compute step size
+        delta = T / B
+
+        for _ in range(B):
+            # Move
+            x = x + delta*v/2 
+            # Reflect
+            g = grad_log_pi(x)
+            ghat = g / norm(g)
+            v = v - 2*(v @ ghat) * ghat
+            # Move
+            x = x + delta*v/2
+
+        loga = logpi(x) + q.logpdf(v) - logpi(x0) - q.logpdf(v0)
+        a = min(1.0, np.exp(loga))
+        ejsd += (a * norm(x0 - x)**2) / N
+        if logu <= loga:
+            samples = np.vstack((samples, x))
+            acceptances[i] = 1         # Accepted!
+            x0 = x
+        else:
+            samples = np.vstack((samples, x0))
+            acceptances[i] = 0         # Rejected
+            # Since this is a non-reversible algorithm, we must negate the velocity at the end
+            v0 = -v0
+    return samples[1:], acceptances, ejsd
 
 
 
