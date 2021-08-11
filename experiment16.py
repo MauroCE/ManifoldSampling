@@ -39,7 +39,7 @@ def grad_log_simulator(xi):
     return - solve(Sigma, xi)
 
 
-# Target distribution is a diagonal MVN
+# Target distribution is a diagonal MVN 
 Sigma0 = diag([1.0, 5.0])
 rho = 1.0
 Sigma = rho * Sigma0
