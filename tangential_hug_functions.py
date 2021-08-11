@@ -766,6 +766,50 @@ def HugStepEJSD(x0, T, B, q, logpi, grad_log_pi):
         return x0, 0, ESJD, ESJD_GRAD, ESJD_TAN
 
 
+
+def HugARStepEJSD(x0, v0, T, B, q, logpi, grad_log_pi):
+    """
+    Same as HugStepEJSD but this uses HugAR with the degenerate AR process.
+    """
+    # Housekeeping
+    v, x = v0, x0
+    # Acceptance ratio
+    logu = np.log(rand())
+    # Compute step size
+    delta = T / B
+
+    for _ in range(B):
+        # Move
+        x = x + delta*v/2 
+        # Reflect
+        g = grad_log_pi(x)
+        ghat = g / norm(g)
+        v = v - 2*(v @ ghat) * ghat
+        # Move
+        x = x + delta*v/2
+    loga = logpi(x) + q.logpdf(v) - logpi(x0) - q.logpdf(v0)  # Log acceptance probability
+    a = min(1.0, np.exp(loga))   # Acceptance probability
+    # ESJD overall
+    ESJD = a * norm(x0 - x)**2
+    # ESJD for gradient and tangent component
+    g0 = grad_log_pi(x0)
+    g0hat = g0 / norm(g0)
+    gx = grad_log_pi(x)
+    gxhat = gx / norm(gx)
+    x0grad = x0 @ g0hat
+    xgrad = x @ gxhat
+    ESJD_GRAD = a * (x0grad- xgrad)**2
+    x0tan = norm(x0 - x0grad * g0hat)
+    xtan = norm(x - xgrad * gxhat)
+    ESJD_TAN = a * (x0tan - xtan)**2
+    if logu <= loga:
+        return x, v0, 1, ESJD, ESJD_GRAD, ESJD_TAN
+    else:
+        return x0, -v0, 0, ESJD, ESJD_GRAD, ESJD_TAN
+
+
+
+
 def HugTangentialStepEJSD_AR(x0, v0s, v0, T, B, alpha, q, logpi, grad_log_pi):
     """
     One step of THUG computing ESJD.
