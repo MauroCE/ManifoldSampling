@@ -679,6 +679,50 @@ def HugAR_EJSD(x0, T, B, N, prob, q, logpi, grad_log_pi):
 
 
 
+def HugARrho_EJSD(x0, T, B, N, rho, q, logpi, grad_log_pi):
+    """
+    Similar to HugAR_EJDS but uses the full AR process. Notice it outputs the averaged (i.e. Expected)
+    JSD already. Again, this should be used on its own, not with Hop. 
+    """
+    assert abs(rho) <= 1, "Rho must satisfy |rho| <= 1."
+    samples, acceptances = x0, np.zeros(N)
+    ejsd = np.zeros(N)
+    v0 = q.rvs()     # Draw initial spherical velocity
+    for i in range(N):
+        v0 = rho * v0 + np.sqrt(1 - rho**2) * q.rvs()
+        # Housekeeping
+        v, x = v0, x0
+        # Acceptance ratio
+        logu = np.log(rand())
+        # Compute step size
+        delta = T / B
+
+        for _ in range(B):
+            # Move
+            x = x + delta*v/2 
+            # Reflect
+            g = grad_log_pi(x)
+            ghat = g / norm(g)
+            v = v - 2*(v @ ghat) * ghat
+            # Move
+            x = x + delta*v/2
+
+        loga = logpi(x) + q.logpdf(v) - logpi(x0) - q.logpdf(v0)
+        a = min(1.0, np.exp(loga))
+        ejsd += (a * norm(x0 - x)**2) / N
+        if logu <= loga:
+            samples = np.vstack((samples, x))
+            acceptances[i] = 1         # Accepted!
+            x0 = x
+        else:
+            samples = np.vstack((samples, x0))
+            acceptances[i] = 0         # Rejected
+            # Since this is a non-reversible algorithm, we must negate the velocity at the end
+            v0 = -v0
+    return samples[1:], acceptances, ejsd
+
+
+
 def HugStepEJSD(x0, T, B, q, logpi, grad_log_pi):
     """
     One step of HUG kernel computing Expected Squared Jump Distace.
