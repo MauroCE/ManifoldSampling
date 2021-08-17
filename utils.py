@@ -68,7 +68,7 @@ def quick_3d_scatters(samples, labels, size=1.0, opacity=0.8):
     fig.show()
 
 
-def quick_MVN_scatter(samples, target, xlims=[-2, 6], ylims=[-3, 5], figsize=(20, 8), lw=5, levels=None, alpha=1.0, zorder=1, colors='gray', step=0.01, return_axes=False):
+def quick_MVN_scatter(samples, target, xlims=[-2, 6], ylims=[-3, 5], figsize=(20, 8), lw=5, levels=None, alpha=1.0, zorder=1, colors='gray', step=0.01, return_axes=False, aspect=False):
     """
     Plots 2D samples and contours of MVN.
     """
@@ -82,6 +82,8 @@ def quick_MVN_scatter(samples, target, xlims=[-2, 6], ylims=[-3, 5], figsize=(20
     else:
         ax.contour(x, y, target.pdf(pos), linewidths=lw, levels=levels, alpha=alpha, zorder=1, colors=colors) 
     ax.scatter(*samples.T)
+    if aspect:
+        ax.set_aspect("equal")
     if not return_axes:
         plt.show()
     else:
@@ -292,8 +294,8 @@ def quick_MVN_marginals_kdes(sample_list, target, labels, lims=(-4, 4), figsize=
     plt.show()
 
 
-def box_plot(ax, data, edge_color, fill_color, positions, labels=None):
-    bp = ax.boxplot(data, patch_artist=True, positions=positions, widths=0.2)
+def box_plot(ax, data, edge_color, fill_color, positions, labels=None, widths=0.2):
+    bp = ax.boxplot(data, patch_artist=True, positions=positions, widths=widths)
     
     for element in ['boxes', 'whiskers', 'fliers', 'means', 'medians', 'caps']:
         plt.setp(bp[element], color=edge_color)

@@ -767,6 +767,46 @@ def HugStepEJSD(x0, T, B, q, logpi, grad_log_pi):
 
 
 
+def HugStepEJSD_Deterministic(x0, v0, logu, T, B, q, logpi, grad_log_pi):
+    """
+    One step of HUG kernel computing Expected Squared Jump Distace.
+    """
+    # Housekeeping
+    v, x = v0, x0
+    # Compute step size
+    delta = T / B
+
+    for _ in range(B):
+        # Move
+        x = x + delta*v/2 
+        # Reflect
+        g = grad_log_pi(x)
+        ghat = g / norm(g)
+        v = v - 2*(v @ ghat) * ghat
+        # Move
+        x = x + delta*v/2
+    loga = logpi(x) + q.logpdf(v) - logpi(x0) - q.logpdf(v0)  # Log acceptance probability
+    a = min(1.0, np.exp(loga))   # Acceptance probability
+    # ESJD overall
+    ESJD = a * norm(x0 - x)**2
+    # ESJD for gradient and tangent component
+    g0 = grad_log_pi(x0)
+    g0hat = g0 / norm(g0)
+    gx = grad_log_pi(x)
+    gxhat = gx / norm(gx)
+    x0grad = x0 @ g0hat
+    xgrad = x @ gxhat
+    ESJD_GRAD = a * (x0grad- xgrad)**2
+    x0tan = norm(x0 - x0grad * g0hat)
+    xtan = norm(x - xgrad * gxhat)
+    ESJD_TAN = a * (x0tan - xtan)**2
+    if logu <= loga:
+        return x, 1, ESJD, ESJD_GRAD, ESJD_TAN
+    else:
+        return x0, 0, ESJD, ESJD_GRAD, ESJD_TAN
+
+
+
 def HugARStepEJSD(x0, v0, T, B, q, logpi, grad_log_pi):
     """
     Same as HugStepEJSD but this uses HugAR with the degenerate AR process.
@@ -810,11 +850,11 @@ def HugARStepEJSD(x0, v0, T, B, q, logpi, grad_log_pi):
 
 
 
-def HugTangentialStepEJSD_AR(x0, v0s, v0, T, B, alpha, q, logpi, grad_log_pi):
+def HugTangentialStepEJSD_AR(x0, v0s, T, B, alpha, q, logpi, grad_log_pi):
     """
-    One step of THUG computing ESJD.
+    One step of THUG-AR computing ESJD but we also output the velocity. This works
+    for both THUG-AR + HOP or THUG-AR-rho + HOP.
     """
-    v0s = q.rvs()                    # Draw velocity spherically
     g0 = grad_log_pi(x0)              # Compute gradient at x0
     g0 = g0 / norm(g0)                  # Normalize
     v0 = v0s - alpha * g0 * (g0 @ v0s) # Tilt velocity
@@ -843,10 +883,46 @@ def HugTangentialStepEJSD_AR(x0, v0s, v0, T, B, alpha, q, logpi, grad_log_pi):
     xtan = norm(x - xgrad * g)
     ESJD_TAN = a * (x0tan - xtan)**2
     if logu <= loga:
-        return x, 1, ESJD, ESJD_GRAD, ESJD_TAN
+        return x, v0s, 1, ESJD, ESJD_GRAD, ESJD_TAN
     else:
-        return x0, 0, ESJD, ESJD_GRAD, ESJD_TAN
+        return x0, -v0s, 0, ESJD, ESJD_GRAD, ESJD_TAN
 
+
+def HugTangentialStepEJSD_AR_Deterministic(x0, v0s, logu, T, B, alpha, q, logpi, grad_log_pi):
+    """
+    One step of THUG-AR computing ESJD but we also output the velocity. This works
+    for both THUG-AR + HOP or THUG-AR-rho + HOP. THIS IS DETERMINISTIC.
+    """
+    g0 = grad_log_pi(x0)              # Compute gradient at x0
+    g0 = g0 / norm(g0)                  # Normalize
+    v0 = v0s - alpha * g0 * (g0 @ v0s) # Tilt velocity
+    v, x = v0, x0                    # Housekeeping
+    delta = T / B                    # Compute step size
+
+    for _ in range(B):
+        x = x + delta*v/2           # Move to midpoint
+        g = grad_log_pi(x)          # Compute gradient at midpoint
+        ghat = g / norm(g)          # Normalize 
+        v = v - 2*(v @ ghat) * ghat # Reflect velocity using midpoint gradient
+        x = x + delta*v/2           # Move from midpoint to end-point
+    # Unsqueeze the velocity
+    g = grad_log_pi(x)
+    g = g / norm(g)
+    v = v + (alpha / (1 - alpha)) * g * (g @ v)
+    loga = logpi(x) + q.logpdf(v) - logpi(x0) - q.logpdf(v0s)
+    a = min(1.0, np.exp(loga))
+    # Compute EJSD
+    ESJD = a * norm(x0 - x)**2
+    x0grad = x0 @ g0
+    xgrad  = x  @ g
+    ESJD_GRAD = a * (x0grad- xgrad)**2
+    x0tan = norm(x0 - x0grad * g0)
+    xtan = norm(x - xgrad * g)
+    ESJD_TAN = a * (x0tan - xtan)**2
+    if logu <= loga:
+        return x, v0s, 1, ESJD, ESJD_GRAD, ESJD_TAN
+    else:
+        return x0, -v0s, 0, ESJD, ESJD_GRAD, ESJD_TAN
 
 
 def HugTangentialStepEJSD(x0, T, B, alpha, q, logpi, grad_log_pi):
@@ -885,6 +961,47 @@ def HugTangentialStepEJSD(x0, T, B, alpha, q, logpi, grad_log_pi):
         return x, 1, ESJD, ESJD_GRAD, ESJD_TAN
     else:
         return x0, 0, ESJD, ESJD_GRAD, ESJD_TAN
+
+
+
+
+def HugTangentialStepEJSD_Deterministic(x0, v0s, logu, T, B, alpha, q, logpi, grad_log_pi):
+    """
+    One step of THUG computing ESJD.
+    """
+    g0 = grad_log_pi(x0)              # Compute gradient at x0
+    g0 = g0 / norm(g0)                  # Normalize
+    v0 = v0s - alpha * g0 * (g0 @ v0s) # Tilt velocity
+    v, x = v0, x0                    # Housekeeping
+    delta = T / B                    # Compute step size
+
+    for _ in range(B):
+        x = x + delta*v/2           # Move to midpoint
+        g = grad_log_pi(x)          # Compute gradient at midpoint
+        ghat = g / norm(g)          # Normalize 
+        v = v - 2*(v @ ghat) * ghat # Reflect velocity using midpoint gradient
+        x = x + delta*v/2           # Move from midpoint to end-point
+    # Unsqueeze the velocity
+    g = grad_log_pi(x)
+    g = g / norm(g)
+    v = v + (alpha / (1 - alpha)) * g * (g @ v)
+    loga = logpi(x) + q.logpdf(v) - logpi(x0) - q.logpdf(v0s)
+    a = min(1.0, np.exp(loga))
+    # Compute EJSD
+    ESJD = a * norm(x0 - x)**2
+    x0grad = x0 @ g0
+    xgrad  = x  @ g
+    ESJD_GRAD = a * (x0grad- xgrad)**2
+    x0tan = norm(x0 - x0grad * g0)
+    xtan = norm(x - xgrad * g)
+    ESJD_TAN = a * (x0tan - xtan)**2
+    if logu <= loga:
+        return x, 1, ESJD, ESJD_GRAD, ESJD_TAN
+    else:
+        return x0, 0, ESJD, ESJD_GRAD, ESJD_TAN
+
+
+
 
 
 def HugPC(x0, T, B, S, N, q, logpi, grad_log_pi):
@@ -1059,6 +1176,41 @@ def Hop(x, lam, k, logpi, grad_log_pi):
     else:
         # Reject - stay where you are
         return x, 0.0
+
+
+def Hop_Deterministic(x, u, log_uniform, lam, k, logpi, grad_log_pi):
+    """
+    Hop Kernel but it is deterministic in the sense that we provide the randomness
+    via us and log_uniforms.
+    """
+    d = len(x)
+    # Compute matrix square root
+    mu_sq = k * lam
+    mu = np.sqrt(mu_sq)
+    lam_sq = lam**2
+    # Compute normalized gradient at x
+    gx = grad_log_pi(x)
+    ngx = norm(gx)
+    ghatx = gx / ngx
+    # Transform to new sample
+    y = x + ((mu*u + (lam - mu) * ghatx * (ghatx @ u)) / np.sqrt(max(1.0, ngx**2)))
+    # Compute stuff at y
+    gy = grad_log_pi(y)
+    ngy = norm(gy)
+    # Acceptance probability
+    logr = logpi(y) - logpi(x) 
+    logr += d * (np.log(ngy) - np.log(ngx))
+    logr -= (norm(y - x)**2) * (ngy**2 - ngx**2) / (2*mu_sq)
+    logr -= 0.5 * (((y - x) @ gy)**2 - ((y - x) @ gx)**2) * ((1 / lam_sq) - (1 / mu_sq))
+    # Accept or reject
+    if log_uniform <= min(0, logr):
+        # Accept
+        return y, 1.0
+    else:
+        # Reject - stay where you are
+        return x, 0.0
+
+
 
 
 def HopPC(x, S, lam, k, logpi, grad_log_pi):
@@ -1319,3 +1471,82 @@ def cycle_zappaPC(kernel2, x0, N, A, m, target, p, tol, a_guess, args2):
         x, a2 = kernel2(y.flatten(), **args2)
         samples, accept1[_], accept2[_] = np.vstack((samples, y, x)), a1, a2
     return samples[1:], accept1, accept2, time.time() - t
+
+
+
+def HugRotated(x0, T, B, N, alpha, q, logpi, grad_log_pi):
+    """
+    Rotated Hug.
+    """
+    # Grab dimension, initialize storage for samples & acceptances
+    samples, acceptances = x0, np.zeros(N)
+    for i in range(N):
+        v0s = q.rvs()                    # Draw velocity spherically
+        g = grad_log_pi(x0)              # Compute gradient at x0
+        g = g / norm(g)                  # Normalize
+        v0 = v0s - alpha * g * (g @ v0s) # Tilt velocity
+        v0 = v0 * norm(v0s) / norm(v0)  # Rescale.
+        v, x = v0, x0                    # Housekeeping
+        logu = np.log(rand())            # Acceptance ratio
+        delta = T / B                    # Compute step size
+
+        for _ in range(B):
+            x = x + delta*v/2           # Move to midpoint
+            g = grad_log_pi(x)          # Compute gradient at midpoint
+            ghat = g / norm(g)          # Normalize 
+            v = v - 2*(v @ ghat) * ghat # Reflect velocity using midpoint gradient
+            x = x + delta*v/2           # Move from midpoint to end-point
+        # Unsqueeze the velocity
+        g = grad_log_pi(x)
+        g = g / norm(g)
+        vs = v + (alpha / (1 - alpha)) * g * (g @ v)
+        # Rescale
+        vs = vs * norm(v0s) /norm(vs)
+        # In the acceptance ratio must use spherical velocities!! Hence v0s and the unsqueezed v
+        if logu <= logpi(x) + q.logpdf(vs) - logpi(x0) - q.logpdf(v0s):
+            samples = np.vstack((samples, x))
+            acceptances[i] = 1         # Accepted!
+            x0 = x
+        else:
+            samples = np.vstack((samples, x0))
+            acceptances[i] = 0         # Rejected
+    return samples[1:], acceptances
+
+
+
+def HugRotatedStepEJSD_Deterministic(x0, v0s, logu, T, B, alpha, q, logpi, grad_log_pi):
+    """
+    One step of Rotated-HUG computing ESJD. This is deterministic.
+    """
+    g0 = grad_log_pi(x0)                # Compute gradient at x0
+    g0 = g0 / norm(g0)                  # Normalize
+    v0 = v0s - alpha * g0 * (g0 @ v0s)  # Tilt velocity
+    v0 = v0 * norm(v0s) / norm(v0)      # Rescale (to complete rotation)
+    v, x = v0, x0                       # Housekeeping
+    delta = T / B                       # Compute step size
+
+    for _ in range(B):
+        x = x + delta*v/2           # Move to midpoint
+        g = grad_log_pi(x)          # Compute gradient at midpoint
+        ghat = g / norm(g)          # Normalize 
+        v = v - 2*(v @ ghat) * ghat # Reflect velocity using midpoint gradient
+        x = x + delta*v/2           # Move from midpoint to end-point
+    # Unsqueeze the velocity
+    g = grad_log_pi(x)
+    g = g / norm(g)
+    vs = v + (alpha / (1 - alpha)) * g * (g @ v)   # unsqueeze
+    vs = vs * norm(v0s) / norm(vs)                  # rescale
+    loga = logpi(x) + q.logpdf(vs) - logpi(x0) - q.logpdf(v0s)
+    a = min(1.0, np.exp(loga))
+    # Compute EJSD
+    ESJD = a * norm(x0 - x)**2
+    x0grad = x0 @ g0
+    xgrad  = x  @ g
+    ESJD_GRAD = a * (x0grad- xgrad)**2
+    x0tan = norm(x0 - x0grad * g0)
+    xtan = norm(x - xgrad * g)
+    ESJD_TAN = a * (x0tan - xtan)**2
+    if logu <= loga:
+        return x, 1, ESJD, ESJD_GRAD, ESJD_TAN
+    else:
+        return x0, 0, ESJD, ESJD_GRAD, ESJD_TAN
