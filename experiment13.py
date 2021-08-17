@@ -173,7 +173,7 @@ if __name__ == "__main__":
     n_runs = 10 #15
     nlags = 20
 
-    epsilons = [0.0000001] #[0.1, 0.001, 0.00001, 0.0000001]
+    epsilons = [0.1, 0.001, 0.00001, 0.0000001]
     alphas = [0.999]       #[0.1, 0.5, 0.9, 0.99, 0.999]
     n_epsilons = len(epsilons)
     n_alphas = len(alphas)
