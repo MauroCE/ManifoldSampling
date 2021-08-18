@@ -9,6 +9,7 @@ from utils import ESS_univariate, ESS, n_unique
 from numpy.random import normal, rand, uniform
 from statsmodels.tsa.stattools import acf
 from Manifolds.RotatedEllipse import RotatedEllipse
+import time
 
 
 def log_uniform_kernel(xi, epsilon):
@@ -129,8 +130,7 @@ def experiment(x00, T, N, alphas, nlags):
             'RMSE': hh_rmse,
             'UNIQUE': hh_uniq,
             'AC_T': hh_act,
-            'AC_U': hh_acu,
-            'T': T1
+            'AC_U': hh_acu
         },
         'TH': {
             'A1': ath1,
@@ -144,8 +144,7 @@ def experiment(x00, T, N, alphas, nlags):
             'RMSE': th_rmse,
             'UNIQUE': th_uniq,
             'AC_T': th_act,
-            'AC_U': th_acu,
-            'T': T2
+            'AC_U': th_acu
         }
     }
     return out
@@ -167,14 +166,14 @@ if __name__ == "__main__":
 
     # Settings
     B = 5 
-    N = 200000
+    N = 5000
     kappa = 0.25    
     n_runs = 10 #15
     nlags = 20
 
     Ts = [7, 5, 3, 1, 0.1, 0.01]
     epsilons = [0.1, 0.001, 0.00001, 0.0000001]
-    alphas = [0.999]       #[0.1, 0.5, 0.9, 0.99, 0.999]
+    alphas = [0.1, 0.5, 0.9, 0.99, 0.999]
     n_epsilons = len(epsilons)
     n_alphas = len(alphas)
     n_T = len(Ts)
@@ -207,6 +206,7 @@ if __name__ == "__main__":
     THETA_AC_THUG = zeros((n_runs, n_epsilons, n_T, n_alphas, nlags)) 
     U_AC_THUG = zeros((n_runs, n_epsilons, n_T, n_alphas, nlags)) 
 
+    initial_time = time.time()
     for i in range(n_runs):
         for j, epsilon in enumerate(epsilons):
             lam = epsilon # For HOP
@@ -244,6 +244,8 @@ if __name__ == "__main__":
 
     save(folder + "EPSILONS.npy", epsilons)
     save(folder + "ALPHAS.npy", alphas)
+    save(folder + "TS.npy", Ts)
+    save(folder + "TIME.npy", np.array([time.time() - initial_time]))
 
     save(folder + "THETA_ESS_HUG.npy", THETA_ESS_HUG)
     save(folder + "U_ESS_HUG.npy", U_ESS_HUG)
