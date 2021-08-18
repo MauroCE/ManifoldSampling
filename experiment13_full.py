@@ -166,7 +166,7 @@ if __name__ == "__main__":
 
     # Settings
     B = 5 
-    N = 5000
+    N = 100000
     kappa = 0.25    
     n_runs = 10 #15
     nlags = 20
