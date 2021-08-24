@@ -1,5 +1,4 @@
-# Uniform Kernel. Uniform Prior. Use HOP to change energy level within the tube.
-# Use expected mean squared jump distance
+# Experiment 24: Uniform Kernel. Uniform Prior. HUG+HOP vs THUG+HOP when dimensionality increases.
 import numpy as np
 from numpy import zeros, diag, eye, log, sqrt, vstack, mean, save, exp, linspace, pi
 from numpy.linalg import solve
