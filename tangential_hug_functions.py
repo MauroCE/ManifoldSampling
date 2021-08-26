@@ -1550,3 +1550,42 @@ def HugRotatedStepEJSD_Deterministic(x0, v0s, logu, T, B, alpha, q, logpi, grad_
         return x, 1, ESJD, ESJD_GRAD, ESJD_TAN
     else:
         return x0, 0, ESJD, ESJD_GRAD, ESJD_TAN
+
+
+
+def HugRotatedStepEJSD_AR_Deterministic(x0, v0s, logu, T, B, alpha, q, logpi, grad_log_pi):
+    """
+    One step of Rotated-HUG computing ESJD returning the velocity. This is deterministic.
+    """
+    g0 = grad_log_pi(x0)                # Compute gradient at x0
+    g0 = g0 / norm(g0)                  # Normalize
+    v0 = v0s - alpha * g0 * (g0 @ v0s)  # Tilt velocity
+    v0 = v0 * norm(v0s) / norm(v0)      # Rescale (to complete rotation)
+    v, x = v0, x0                       # Housekeeping
+    delta = T / B                       # Compute step size
+
+    for _ in range(B):
+        x = x + delta*v/2           # Move to midpoint
+        g = grad_log_pi(x)          # Compute gradient at midpoint
+        ghat = g / norm(g)          # Normalize 
+        v = v - 2*(v @ ghat) * ghat # Reflect velocity using midpoint gradient
+        x = x + delta*v/2           # Move from midpoint to end-point
+    # Unsqueeze the velocity
+    g = grad_log_pi(x)
+    g = g / norm(g)
+    vs = v + (alpha / (1 - alpha)) * g * (g @ v)   # unsqueeze
+    vs = vs * norm(v0s) / norm(vs)                  # rescale
+    loga = logpi(x) + q.logpdf(vs) - logpi(x0) - q.logpdf(v0s)
+    a = min(1.0, np.exp(loga))
+    # Compute EJSD
+    ESJD = a * norm(x0 - x)**2
+    x0grad = x0 @ g0
+    xgrad  = x  @ g
+    ESJD_GRAD = a * (x0grad- xgrad)**2
+    x0tan = norm(x0 - x0grad * g0)
+    xtan = norm(x - xgrad * g)
+    ESJD_TAN = a * (x0tan - xtan)**2
+    if logu <= loga:
+        return x, v0s, 1, ESJD, ESJD_GRAD, ESJD_TAN
+    else:
+        return x0, -v0s, 0, ESJD, ESJD_GRAD, ESJD_TAN

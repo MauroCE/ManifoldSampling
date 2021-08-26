@@ -1,9 +1,11 @@
-# Experiment 24: Uniform Kernel. Uniform Prior. HUG+HOP vs THUG+HOP when dimensionality increases.
+# Experiment 25: Similar to experiment 23 but using AR process
 import numpy as np
 from numpy import zeros, diag, eye, log, sqrt, vstack, mean, save, exp, linspace, pi
 from numpy.linalg import solve
 from scipy.stats import multivariate_normal as MVN
-from tangential_hug_functions import HugTangentialStepEJSD_Deterministic, Hop_Deterministic, HugStepEJSD_Deterministic
+from tangential_hug_functions import HugRotatedStepEJSD_AR_Deterministic
+from tangential_hug_functions import Hop_Deterministic
+from tangential_hug_functions import HugStepEJSD_Deterministic
 from utils import ESS_univariate, ESS, n_unique
 from numpy.random import normal, rand, uniform
 from statsmodels.tsa.stattools import acf
@@ -39,13 +41,13 @@ def grad_log_simulator(xi):
     return - solve(Sigma, xi)
 
 
-def experiment(x00, T, N, alphas, nlags):
-    """Runs Hug+Hop and THUG+HOP using the same velocities and the same random seeds.
+def experiment(x00, T, N, alphas, nlags, rho=0.9):
+    """Runs Hug+Hop and RotatedHUG+HOP using the same velocities and the same random seeds.
     We also try to limit the noise in the HOP kernel by sampling the u variables beforehand.
-    I run THUG for all values of alpha with the randomness fixed. 
+    I run RotatedHUG for all values of alpha with the randomness fixed. 
     This is 1 run, for 1 epsilon. It does 1 HUG+HOP and then THUG+HOP for all alphas.
     T1: T for HUG
-    T2: T for THUG
+    T2: T for RotatedHUG
     """
     ### COMMON VARIABLES
     v = q.rvs(N)
@@ -54,25 +56,25 @@ def experiment(x00, T, N, alphas, nlags):
     u = MVN(zeros(2), eye(2)).rvs(N) # Original velocities for HOP kernel
     ### STORAGE (HUG + HOP)
     hh = x00              # Initial sample
-    ahh1 = 0.0       # Acceptance probability for HUG kernel
-    ahh2 = 0.0       # Acceptance probability for HOP kernel (when used with HUG)
+    ahh1 = 0.0            # Acceptance probability for HUG kernel
+    ahh2 = 0.0            # Acceptance probability for HOP kernel (when used with HUG)
     ehh = 0.0             # EJSD
     eghh = 0.0            # EJSD in Gradient direction
     ethh = 0.0            # EJSD in Tangent direction
-    ### STORAGE (THUG + HOP) I MUST STORE FOR ALL ALPHAS
-    ath1 = zeros(n_alphas)
-    ath2 = zeros(n_alphas)
-    eth  = zeros(n_alphas)
-    egth = zeros(n_alphas)
-    etth = zeros(n_alphas)
-    ### ADDITIONAL STORAGE FOR THUG
-    th_esst = zeros(n_alphas)
-    th_essu = zeros(n_alphas)
-    th_essj = zeros(n_alphas)
-    th_rmse = zeros(n_alphas)
-    th_uniq = zeros(n_alphas)
-    th_act  = zeros((n_alphas, nlags))
-    th_acu  = zeros((n_alphas, nlags))
+    ### STORAGE (RotatedHUG + HOP) I MUST STORE FOR ALL ALPHAS
+    arh1 = zeros(n_alphas)
+    arh2 = zeros(n_alphas)
+    erh  = zeros(n_alphas)
+    egrh = zeros(n_alphas)
+    etrh = zeros(n_alphas)
+    ### ADDITIONAL STORAGE FOR RotatedHUG
+    rh_esst = zeros(n_alphas)
+    rh_essu = zeros(n_alphas)
+    rh_essj = zeros(n_alphas)
+    rh_rmse = zeros(n_alphas)
+    rh_uniq = zeros(n_alphas)
+    rh_act  = zeros((n_alphas, nlags))
+    rh_acu  = zeros((n_alphas, nlags))
     ### HUG + HOP
     x = x00
     for i in range(N):
@@ -93,28 +95,32 @@ def experiment(x00, T, N, alphas, nlags):
     hh_uniq = n_unique(hh)                             # Number of unique samples
     hh_act  = acf(hh[::2, 0], adjusted=True, nlags=nlags, fft=True)[1:]  # Autocorrelation for theta (remove the first 1.0)
     hh_acu  = acf(hh[::2, 1], adjusted=True, nlags=nlags, fft=True)[1:]  # Autocorrelation for u
-    ### THUG + HOP
+    ### RotatedHUG + HOP
     for k, alpha in enumerate(alphas):
         x = x00
-        th = x00      # RESTART THE SAMPLES FROM SCRATCH
+        rh = x00      # RESTART THE SAMPLES FROM SCRATCH
+        velocity = v[0]
+        rho_value = 1.0    # will be changed to rho after 1st iteration
         for i in range(N):
-            y, a1, e, eg, et = HugTangentialStepEJSD_Deterministic(x, v[i], log_uniforms1[i], T, B, alpha, q, log_abc_posterior, grad_log_simulator)
+            velocity = rho_value*velocity + sqrt(1 - rho_value**2)*v[i]
+            y, velocity, a1, e, eg, et = HugRotatedStepEJSD_AR_Deterministic(x, velocity, log_uniforms1[i], T, B, alpha, q, log_abc_posterior, grad_log_simulator)
             x, a2 = Hop_Deterministic(y, u[i], log_uniforms2[i], lam, kappa, log_abc_posterior, grad_log_simulator)
-            th = vstack((th, y, x))
-            ath1[k] += a1 * 100 / N
-            ath2[k] += a2 * 100 / N
-            eth[k]  += e / N
-            egth[k] += eg / N 
-            etth[k] += et / N 
-        ### COMPUTE ESS AND OTHER METRISC FOR THUG
-        th = th[1:]
-        th_esst[k] = ESS_univariate(th[::2, 0])     # ESS for theta
-        th_essu[k] = ESS_univariate(th[::2, 1])     # ESS for u
-        th_essj[k] = ESS(th[::2])                   # ESS joint
-        th_rmse[k] = sqrt(mean((target.logpdf(th) - z0)**2))  # RMSE on energy
-        th_uniq[k] = n_unique(th)                             # Number of unique samples
-        th_act[k] = acf(th[::2, 0], adjusted=True, nlags=nlags, fft=True)[1:]  # Autocorrelation for theta
-        th_acu[k] = acf(th[::2, 1], adjusted=True, nlags=nlags, fft=True)[1:]  # Autocorrelation for u
+            rh = vstack((rh, y, x))
+            arh1[k] += a1 * 100 / N
+            arh2[k] += a2 * 100 / N
+            erh[k]  += e / N
+            egrh[k] += eg / N 
+            etrh[k] += et / N 
+            rho_value = rho
+        ### COMPUTE ESS AND OTHER METRISC FOR RotatedHUG
+        rh = rh[1:]
+        rh_esst[k] = ESS_univariate(rh[::2, 0])     # ESS for theta
+        rh_essu[k] = ESS_univariate(rh[::2, 1])     # ESS for u
+        rh_essj[k] = ESS(rh[::2])                   # ESS joint
+        rh_rmse[k] = sqrt(mean((target.logpdf(rh) - z0)**2))  # RMSE on energy
+        rh_uniq[k] = n_unique(rh)                             # Number of unique samples
+        rh_act[k] = acf(rh[::2, 0], adjusted=True, nlags=nlags, fft=True)[1:]  # Autocorrelation for theta
+        rh_acu[k] = acf(rh[::2, 1], adjusted=True, nlags=nlags, fft=True)[1:]  # Autocorrelation for u
     # RETURN EVERYTHING
     out = {
         'HH': {
@@ -131,19 +137,19 @@ def experiment(x00, T, N, alphas, nlags):
             'AC_T': hh_act,
             'AC_U': hh_acu
         },
-        'TH': {
-            'A1': ath1,
-            'A2': ath2,
-            'E': eth,
-            'EG': egth, 
-            'ET': etth, 
-            'ESS_T': th_esst,
-            'ESS_U': th_essu,
-            'ESS_J': th_essj,
-            'RMSE': th_rmse,
-            'UNIQUE': th_uniq,
-            'AC_T': th_act,
-            'AC_U': th_acu
+        'RH': {
+            'A1': arh1,
+            'A2': arh2,
+            'E': erh,
+            'EG': egrh, 
+            'ET': etrh, 
+            'ESS_T': rh_esst,
+            'ESS_U': rh_essu,
+            'ESS_J': rh_essj,
+            'RMSE': rh_rmse,
+            'UNIQUE': rh_uniq,
+            'AC_T': rh_act,
+            'AC_U': rh_acu
         }
     }
     return out
@@ -152,11 +158,11 @@ def experiment(x00, T, N, alphas, nlags):
 
 if __name__ == "__main__":
     # Target distribution is a diagonal MVN
-    Sigma = diag([1.0, 5.0, 2.0, 3.5])  # theta, u
-    target = MVN(zeros(4), Sigma)
+    Sigma = diag([1.0, 5.0])  # theta, u
+    target = MVN(zeros(2), Sigma)
 
     # Proposal for velocity in HUG/THUG
-    q = MVN(zeros(4), eye(4))
+    q = MVN(zeros(2), eye(2))
 
     # Sample a point at the beginning just to obtain some energy level
     z0 = -2.9513586307684885 #target.logpdf(target.rvs())
@@ -170,9 +176,9 @@ if __name__ == "__main__":
     n_runs = 50 #15
     nlags = 20
 
-    Ts = [10, 1, 0.1, 0.01] #[7, 5, 3, 1, 0.1, 0.01]
+    Ts = [1, 0.1, 0.01]
     epsilons = [0.1, 0.001, 0.00001, 0.0000001]
-    alphas = [0.5, 0.9, 0.99, 0.999]
+    alphas = [0.9, 0.99, 0.999]
     n_epsilons = len(epsilons)
     n_alphas = len(alphas)
     n_T = len(Ts)
@@ -191,23 +197,22 @@ if __name__ == "__main__":
     THETA_AC_HUG = zeros((n_runs, n_epsilons, n_T, nlags))  # Autocorrelation for theta
     U_AC_HUG = zeros((n_runs, n_epsilons, n_T, nlags))      # Autocorrelation for u
 
-    # THUG
-    THETA_ESS_THUG = zeros((n_runs, n_epsilons, n_T, n_alphas))      
-    U_ESS_THUG = zeros((n_runs, n_epsilons, n_T, n_alphas))  
-    ESS_JOINT_THUG = zeros((n_runs, n_epsilons, n_T, n_alphas))        
-    A_THUG = zeros((n_runs, n_epsilons, n_T, n_alphas))            
-    RMSE_THUG = zeros((n_runs, n_epsilons, n_T, n_alphas))    
-    EJSD_THUG = zeros((n_runs, n_epsilons, n_T, n_alphas))             
-    G_EJSD_THUG = zeros((n_runs, n_epsilons, n_T, n_alphas))           
-    T_EJSD_THUG = zeros((n_runs, n_epsilons, n_T, n_alphas))
-    A_HOP_THUG = zeros((n_runs, n_epsilons, n_T, n_alphas))    
-    N_UNIQUE_THUG = zeros((n_runs, n_epsilons, n_T, n_alphas))     
-    THETA_AC_THUG = zeros((n_runs, n_epsilons, n_T, n_alphas, nlags)) 
-    U_AC_THUG = zeros((n_runs, n_epsilons, n_T, n_alphas, nlags)) 
+    # RotatedHUG
+    THETA_ESS_RHUG = zeros((n_runs, n_epsilons, n_T, n_alphas))      
+    U_ESS_RHUG = zeros((n_runs, n_epsilons, n_T, n_alphas))  
+    ESS_JOINT_RHUG = zeros((n_runs, n_epsilons, n_T, n_alphas))        
+    A_RHUG = zeros((n_runs, n_epsilons, n_T, n_alphas))            
+    RMSE_RHUG = zeros((n_runs, n_epsilons, n_T, n_alphas))    
+    EJSD_RHUG = zeros((n_runs, n_epsilons, n_T, n_alphas))             
+    G_EJSD_RHUG = zeros((n_runs, n_epsilons, n_T, n_alphas))           
+    T_EJSD_RHUG = zeros((n_runs, n_epsilons, n_T, n_alphas))
+    A_HOP_RHUG = zeros((n_runs, n_epsilons, n_T, n_alphas))    
+    N_UNIQUE_RHUG = zeros((n_runs, n_epsilons, n_T, n_alphas))     
+    THETA_AC_RHUG = zeros((n_runs, n_epsilons, n_T, n_alphas, nlags)) 
+    U_AC_RHUG = zeros((n_runs, n_epsilons, n_T, n_alphas, nlags)) 
 
     initial_time = time.time()
     for i in range(n_runs):
-        print("Run: ", i)
         # We need a new point for each run, but then must be the same for all other settings
         initial_point = new_point()
         for j, epsilon in enumerate(epsilons):
@@ -227,22 +232,22 @@ if __name__ == "__main__":
                 N_UNIQUE_HUG[i, j, k]    = out['HH']['UNIQUE']
                 THETA_AC_HUG[i, j, k, :] = out['HH']['AC_T']
                 U_AC_HUG[i, j, k, :]     = out['HH']['AC_U']
-                # Store THUG results
-                THETA_ESS_THUG[i, j, k, :]   = out['TH']['ESS_T']
-                U_ESS_THUG[i, j, k, :]       = out['TH']['ESS_U']
-                ESS_JOINT_THUG[i, j, k, :]   = out['TH']['ESS_J']
-                A_THUG[i, j, k, :]           = out['TH']['A1']
-                A_HOP_THUG[i, j, k, :]       = out['TH']['A2']
-                RMSE_THUG[i, j, k, :]        = out['TH']['RMSE']
-                EJSD_THUG[i, j, k, :]        = out['TH']['E'] 
-                G_EJSD_THUG[i, j, k, :]      = out['TH']['EG'] 
-                T_EJSD_THUG[i, j, k, :]      = out['TH']['ET']
-                N_UNIQUE_THUG[i, j, k, :]    = out['TH']['UNIQUE']
-                THETA_AC_THUG[i, j, k, :, :] = out['TH']['AC_T']
-                U_AC_THUG[i, j, k, :, :]     = out['TH']['AC_U']
+                # Store RotatedHUG results
+                THETA_ESS_RHUG[i, j, k, :]   = out['RH']['ESS_T']
+                U_ESS_RHUG[i, j, k, :]       = out['RH']['ESS_U']
+                ESS_JOINT_RHUG[i, j, k, :]   = out['RH']['ESS_J']
+                A_RHUG[i, j, k, :]           = out['RH']['A1']
+                A_HOP_RHUG[i, j, k, :]       = out['RH']['A2']
+                RMSE_RHUG[i, j, k, :]        = out['RH']['RMSE']
+                EJSD_RHUG[i, j, k, :]        = out['RH']['E'] 
+                G_EJSD_RHUG[i, j, k, :]      = out['RH']['EG'] 
+                T_EJSD_RHUG[i, j, k, :]      = out['RH']['ET']
+                N_UNIQUE_RHUG[i, j, k, :]    = out['RH']['UNIQUE']
+                THETA_AC_RHUG[i, j, k, :, :] = out['RH']['AC_T']
+                U_AC_RHUG[i, j, k, :, :]     = out['RH']['AC_U']
 
     # Save results
-    folder = "experiment13full4/"
+    folder = "experiment25/"
 
     save(folder + "EPSILONS.npy", epsilons)
     save(folder + "ALPHAS.npy", alphas)
@@ -262,16 +267,16 @@ if __name__ == "__main__":
     save(folder + "THETA_AC_HUG.npy", THETA_AC_HUG)
     save(folder + "U_AC_HUG.npy", U_AC_HUG)
 
-    save(folder + "THETA_ESS_THUG.npy", THETA_ESS_THUG)
-    save(folder + "U_ESS_THUG.npy", U_ESS_THUG)
-    save(folder + "ESS_JOINT_THUG.npy", ESS_JOINT_THUG)
-    save(folder + "A_THUG.npy", A_THUG)
-    save(folder + "RMSE_THUG.npy", RMSE_THUG)
-    save(folder + "EJSD_THUG.npy", EJSD_THUG)
-    save(folder + "G_EJSD_THUG.npy", G_EJSD_THUG)
-    save(folder + "T_EJSD_THUG.npy", T_EJSD_THUG)
-    save(folder + "A_HOP_THUG.npy", A_HOP_THUG)
-    save(folder + "N_UNIQUE_THUG.npy", N_UNIQUE_THUG)
-    save(folder + "THETA_AC_THUG.npy", THETA_AC_THUG)
-    save(folder + "U_AC_THUG.npy", U_AC_THUG)
+    save(folder + "THETA_ESS_RHUG.npy", THETA_ESS_RHUG)
+    save(folder + "U_ESS_RHUG.npy", U_ESS_RHUG)
+    save(folder + "ESS_JOINT_RHUG.npy", ESS_JOINT_RHUG)
+    save(folder + "A_RHUG.npy", A_RHUG)
+    save(folder + "RMSE_RHUG.npy", RMSE_RHUG)
+    save(folder + "EJSD_RHUG.npy", EJSD_RHUG)
+    save(folder + "G_EJSD_RHUG.npy", G_EJSD_RHUG)
+    save(folder + "T_EJSD_RHUG.npy", T_EJSD_RHUG)
+    save(folder + "A_HOP_RHUG.npy", A_HOP_RHUG)
+    save(folder + "N_UNIQUE_RHUG.npy", N_UNIQUE_RHUG)
+    save(folder + "THETA_AC_RHUG.npy", THETA_AC_RHUG)
+    save(folder + "U_AC_RHUG.npy", U_AC_RHUG)
 
