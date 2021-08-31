@@ -1,6 +1,6 @@
 # Experiment 23: Similar to experiment 13 full grid but here we compare HUG+HOP with RotatedHUG+HOP.
 # Uniform Kernel. Uniform Prior. Run a grid search over settings of T, alpha and epsilon. Run every 
-# setting with SHARED RANDOMNESS and for 10 times.
+# setting with SHARED RANDOMNESS and for 50 times.
 import numpy as np
 from numpy import zeros, diag, eye, log, sqrt, vstack, mean, save, exp, linspace, pi
 from numpy.linalg import solve
