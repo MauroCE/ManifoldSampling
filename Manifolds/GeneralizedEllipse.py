@@ -2,6 +2,8 @@ import numpy as np
 from numpy import log
 from numpy import pi
 from numpy.linalg import det, inv, solve
+from scipy.optimize import fsolve
+from scipy.stats import multivariate_normal as MVN
 from Manifolds.Manifold import Manifold
 
 
@@ -23,6 +25,7 @@ class GeneralizedEllipse(Manifold):
         self.Sinv = inv(Sigma)
         self.mu = mu
         self.logdetS = log(det(self.S))
+        self.MVN = MVN(self.mu, self.S)
         # Compute gamma (RHS) 
         self.gamma = -self.n * log(2*pi) - self.logdetS -2 * log(z)
         super().__init__(m=1, d=(self.n-1))
@@ -34,6 +37,15 @@ class GeneralizedEllipse(Manifold):
     def Q(self, xyz):
         """Q"""
         return (2 * self.Sinv @ (xyz - self.mu)).reshape(-1, self.m)
+
+    def sample(self):
+        """Samples from the contour by first sampling a point from the original
+        MVN and then it rescales it until it is on the correct contour. This should
+        work since the MVN is spherically symmetric."""
+        start = self.MVN.rvs()   # Get initial MVN sample
+        objective = lambda coef: self.MVN.pdf(coef*start) - self.z  # Objective function checks closeness to z
+        optimal_coef = fsolve(objective, 1.0) # Find coefficient so that optimal_coef*start is on contour
+        return start * optimal_coef
     
 
 class GeneralizedEllipsePC(Manifold):

@@ -306,3 +306,10 @@ def box_plot(ax, data, edge_color, fill_color, positions, labels=None, widths=0.
     for patch in bp['fliers']:
         patch.set(markeredgecolor=edge_color)
     return bp
+
+
+def num_grad_hug_hop(N, B):
+    return (B * N / 2) + N
+
+def num_grad_thug_hop(N, B):
+    return ((B + 2) * N / 2) + N

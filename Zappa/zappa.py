@@ -12,6 +12,7 @@ from scipy.stats import multivariate_normal, norm
 from utils import normalize
 from utils import logp as logp_scale
 from utils import angle_between
+import scipy.linalg as la
 
 def zappa_sampling_multivariate(x0, manifold, logf, logp, n, sigma, tol, a_guess, maxiter=50):
     """
@@ -109,6 +110,51 @@ def zappa_sampling_multivariate(x0, manifold, logf, logp, n, sigma, tol, a_guess
 
     return samples
 
+
+
+def zappa_step_EJSD_deterministic(x0, v0, logu, manifold, logf, logp, sigma, tol, a_guess, maxiter=50):
+    """
+    One step of Zappa, deterministic, computing EJSD.
+    """
+    
+    a = 0.0
+    # Do First Step
+    Qx = manifold.Q(x0)                       # Gradient at x.                             Size: (d + m, )
+    tx_basis = manifold.tangent_basis(Qx)    # ON basis for tangent space at x using SVD  Size: (d + m, d)
+    total_n_gradients = 1.0
+
+    # Sample along tangent 
+    v_sample = sigma*v0  # Isotropic MVN with scaling sigma         Size: (d, )
+    v = tx_basis @ v_sample    # Linear combination of the basis vectors  Size: (d + m, )
+
+    # Forward Projection
+    a, flag, n_grad = project_zappa(manifold.q, x0 + v, Qx, manifold.Q, tol, maxiter)
+    total_n_gradients += n_grad
+    if flag == 0:                                  # Projection failed
+        return x0, 0.0, 0.0, total_n_gradients
+    y = x0 + v + Qx @ a                             # Projected point (d + m, )
+
+    # Compute v' from y
+    Qy = manifold.Q(y)                         # Gradient at y.                            Size: (d + m, )
+    ty_basis = manifold.tangent_basis(Qy)      # ON basis for tangent space at y using SVD Size: (d + m, d)
+    v_prime_sample = (x0 - y) @ ty_basis  # Components along tangent                  Size: (d + m, )
+    total_n_gradients += 1
+
+    # Metropolis-Hastings
+    loga = logf(y) + logp(v_prime_sample) - logf(x0) - logp(v_sample)
+    a = min(1.0, np.exp(loga))
+    EJSD = a * np.linalg.norm(x0 - y)**2
+    if logu > loga:
+        return x0, a, EJSD, total_n_gradients
+
+    # Backward Projection
+    v_prime = v_prime_sample @ ty_basis.T   # Linear combination of the basis vectors. Size: (d + m, )
+    a_prime, flag, n_grad = project_zappa(manifold.q, y + v_prime, Qy, manifold.Q, tol, maxiter)
+    total_n_gradients += n_grad
+    if flag == 0:
+        return x0, a, EJSD, total_n_gradients
+
+    return y, a, EJSD, total_n_gradients
 
 
 def zappa_step_accept(x0, manifold, p, n, tol, a_guess, maxiter=50):
@@ -266,6 +312,30 @@ def project_multivariate(x, v, Q, q, tol=None, a_guess=np.zeros(1), maxiter=50):
     """Finds a such that q(x + v + a*Q) = 0"""
     opt_output = root(lambda a: q(x + v + Q @ a), a_guess, tol=tol, options={'maxfev':maxiter})
     return (opt_output.x, opt_output.success) # output flag for accept/reject
+
+
+def project_zappa(q, z, Q, grad_q, tol = 1.48e-08 , maxiter = 50):
+    '''
+    This version is the version of Miranda & Zappa. It retuns i, the number of iterations
+    i.e. the number of gradient evaluations used.
+    '''
+    a, flag, i = np.zeros(Q.shape[1]), 1, 0
+
+    #Newton's method to solve q(z + Q @ a)
+    while la.norm(q(z + Q @ a)) > tol:
+        delta_a = la.solve(grad_q(z + Q @ a).transpose() @ Q, -q(z + Q @ a))
+        a += delta_a
+        i += 1
+        #print(a, q(z + Q @ a), i) #for debugging
+        if i > maxiter: 
+            flag = 0
+            return a, flag, i
+            
+    return a, flag, i
+
+
+
+
 
 def zappa_sampling(x0, manifold, logf, logp, n, sigma, tol, a_guess, maxiter=50):
     """
