@@ -321,20 +321,16 @@ def project_zappa(q, z, Q, grad_q, tol = 1.48e-08 , maxiter = 50):
     '''
     a, flag, i = np.zeros(Q.shape[1]), 1, 0
 
-    #Newton's method to solve q(z + Q @ a)
+    # Newton's method to solve q(z + Q @ a)
     while la.norm(q(z + Q @ a)) > tol:
         delta_a = la.solve(grad_q(z + Q @ a).transpose() @ Q, -q(z + Q @ a))
         a += delta_a
         i += 1
-        #print(a, q(z + Q @ a), i) #for debugging
         if i > maxiter: 
             flag = 0
             return a, flag, i
             
     return a, flag, i
-
-
-
 
 
 def zappa_sampling(x0, manifold, logf, logp, n, sigma, tol, a_guess, maxiter=50):

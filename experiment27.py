@@ -7,7 +7,7 @@ from numpy.random import rand
 from time import time
 
 from Manifolds.GeneralizedEllipse import GeneralizedEllipse
-from Zappa.zappa import zappa_sampling_multivariate, zappa_step_EJSD_deterministic
+from Zappa.zappa import zappa_step_EJSD_deterministic
 from utils import ESS, ESS_univariate
 
 from multiprocessing import Pool
@@ -137,6 +137,8 @@ if __name__ == "__main__":
     save(folder + "TS.npy", Ts)
     save(folder + "TIME.npy", np.array([time() - initial_time]))
     save(folder + "D.npy", d)
+    save(folder + "N.npy", N)
+    save(folder + "N_RUNS.npy", n_runs)
 
     save(folder + "ESS_ZAPPA.npy", ESS_ZAPPA)
     save(folder + "ESS_JOINT_ZAPPA.npy", ESS_JOINT_ZAPPA)

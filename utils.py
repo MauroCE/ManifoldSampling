@@ -90,7 +90,7 @@ def quick_MVN_scatter(samples, target, xlims=[-2, 6], ylims=[-3, 5], figsize=(20
         return fig, ax
 
 
-def MVN_scatters(samples_list, target, xlims=[-2, 6], ylims=[-3, 5], figsize=(20, 8), lw=5, levels=None, alpha=1.0, zorder=1, colors='gray', step=0.01, return_axes=False, labels=None):
+def MVN_scatters(samples_list, target, xlims=[-2, 6], ylims=[-3, 5], figsize=(20, 8), lw=5, levels=None, alpha=1.0, zorder=1, colors='gray', step=0.01, return_axes=False, labels=None, axis=None):
     """
     Plots 2D samples and contours of MVN.
     """
@@ -98,7 +98,11 @@ def MVN_scatters(samples_list, target, xlims=[-2, 6], ylims=[-3, 5], figsize=(20
     x, y = np.mgrid[xlims[0]:xlims[1]:step, ylims[0]:ylims[1]:step]
     pos = np.dstack((x, y))
 
-    fig, ax = plt.subplots(figsize=figsize)
+    if axis is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        ax = axis
+
     if levels is None:
         ax.contour(x, y, target.pdf(pos), linewidths=lw) 
     else:
@@ -112,7 +116,10 @@ def MVN_scatters(samples_list, target, xlims=[-2, 6], ylims=[-3, 5], figsize=(20
     if not return_axes:
         plt.show()
     else:
-        return fig, ax
+        if axis is None:
+            return fig, ax
+        else:
+            return ax
 
 
 
@@ -313,3 +320,60 @@ def num_grad_hug_hop(N, B):
 
 def num_grad_thug_hop(N, B):
     return ((B + 2) * N / 2) + N
+
+
+def test_circle(x0, n, q, δ, α, grad_logπ, logπ):
+    """
+    This function checks if HUG and THUG always end up on the circle manifold after 1 iteration.
+    For n times it starts at x0, perform one HUG or THUG step (with B=1) and records the end position.
+    At the end the function checks if all these end positions are on the circle.
+    """
+    hug_moves = []
+    thug_moves = []
+    # Perform n steps of hug with B=1
+    for _ in range(n):
+        v0 = q.rvs()
+        x = x0 + δ*v0/2
+        g = grad_logπ(x)
+        ĝ = g / norm(g)
+        v = v0 - 2*(v0 @ ĝ) * ĝ
+        hug_moves.append(x + δ*v/2)
+    # Perform n steps of thug with B=1
+    for _ in range(n):
+        v0s = q.rvs()
+        g = grad_logπ(x0)
+        g = g / norm(g)
+        v0 = v0s - α*g*(g @ v0s)
+        x = x0 + δ*v0/2
+        g = grad_logπ(x)
+        ĝ = g / norm(g)
+        v = v0 - 2*(v0 @ ĝ) * ĝ
+        thug_moves.append(x + δ*v/2)
+    return max(abs(logπ(hug_moves) - logπ(x0))), max(abs(logπ(thug_moves) - logπ(x0)))  
+
+
+def ar_and_var_change_for_hug_thug(x0, T, B, N, αs, q, logπ, grad_logπ, Hug, HugTangential):
+    """
+    For different alphas, this function runs Hug and Thug and computes the decrease in Acceptance
+    Rate and the improvement in variance brought by Thug.
+    """
+    # For different alphas I see what is the acceptance rate decrease and the variance improvement
+    ar_decreases = []
+    var_improv = []
+    s_hugs = []
+    s_thugs = []
+    for α in αs:
+        samples_hug, accept_hug = Hug(x0, T, B, N, q, logπ, grad_logπ)
+        samples_thug, accept_thug = HugTangential(x0, T, B, N, α, q, logπ, grad_logπ)
+        var_hug = np.var(logπ(samples_hug) - logπ(x0))
+        var_thug = np.var(logπ(samples_thug) - logπ(x0))
+        ar_decreases.append((np.sum(accept_hug) - np.sum(accept_thug)) * 100 / np.sum(accept_hug))
+        var_improv.append(var_hug / var_thug)
+        s_hugs.append(samples_hug)
+        s_thugs.append(samples_thug)
+    return ar_decreases, var_improv, s_hugs, s_thugs
+
+
+invert_sign = lambda x: 1*x - 2*x
+
+rangeof = lambda x: (np.min(x), np.max(x))

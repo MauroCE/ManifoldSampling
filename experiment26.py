@@ -166,7 +166,7 @@ m = 2                                # Number of latents in G and K model
 d = 3 + m                            # Dimension of ambient space (theta has dim 3)
 Ts = [10.0, 1.0, 0.1, 0.01]                         # Total integration time
 B = 5                                # Number of bounces per iteration of HUG/THUG
-N = 10000                            # Number of samples
+N = 20000                            # Number of samples
 epsilons = [1.0, 0.1, 0.01]          # Tolerance for ABC
 kappa = 0.005                        # HOP scaling in remaining directions relative to lam
 nlags = 2                            # Number of lags to compute autocorrelation for
@@ -175,7 +175,7 @@ n_alphas = len(alphas)
 n_cores = 8
 n_epsilons = len(epsilons)
 n_T = len(Ts)
-n_runs = 5                           # Number of runs for each setting combination
+n_runs = 16                          # Number of runs for each setting combination
 rng_seed = 1234
 theta0 = np.array([3.0, 1.0, 0.5])   # True parameter for G and K model
 y_star = data_generator(theta0, N=m, rng_seed=rng_seed) # Observed data
@@ -189,15 +189,18 @@ func = lambda xi: np.r_[f(xi), zeros(d-1)]            # Function used to find in
 def find_initial_points(n):
     initial_points = []
     while len(initial_points) < n:
-        # Construct a new guess
-        theta_guess = uniform(0.1, 3.0, size=3)
-        guess = hstack((theta_guess, zeros(m)))
-        # Solve to find point on manifold
-        point = fsolve(func, guess)
-        if not np.isfinite([log_abc_posterior(point, epsilons[i]) for i in range(n_epsilons)]).all():
+        try:
+            # Construct a new guess
+            theta_guess = uniform(0.1, 3.0, size=3)
+            guess = hstack((theta_guess, zeros(m)))
+            # Solve to find point on manifold
+            point = fsolve(func, guess)
+            if not np.isfinite([log_abc_posterior(point, epsilons[i]) for i in range(n_epsilons)]).all():
+                pass
+            else:
+                initial_points.append(point)
+        except RuntimeWarning:
             pass
-        else:
-            initial_points.append(point)
     return vstack(initial_points)
 
 # Initial points on manifold
