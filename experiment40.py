@@ -80,7 +80,7 @@ if __name__ == "__main__":
     EPSILONS = [0.001, 0.0000001, 0.0000000001] #[0.001, 0.00001, 0.0000001]
     N_EPSILON = len(EPSILONS)
 
-    N_RUNS = 10
+    N_RUNS = 50
     ALPHAS = [0.9, 0.99, 0.999]
     if len(ALPHAS) != len(EPSILONS):
         raise ValueError("The number of alphas should be the same as epsilons")

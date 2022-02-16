@@ -571,6 +571,31 @@ def HugTangentialPC(x0, T, B, S, N, alpha, q, logpi, grad_log_pi):
     return samples[1:], acceptances
 
 
+def HugTangentialPCStep(x0, T, B, S, alpha, q, logpi, grad_log_pi):
+    """One step of THUG using Pre-Conditioning (PC)."""
+    v0s = q.rvs()                    # Draw velocity spherically
+    g0 = grad_log_pi(x0)              # Compute gradient at x0
+    Sg = S(x0) @ g0
+    v0 = v0s - alpha * (g0 @ v0s) * Sg / (g0 @ Sg) # Tilt velocity
+    v, x = v0, x0                    # Housekeeping
+    logu = np.log(rand())            # Acceptance ratio
+    delta = T / B                    # Compute step size
+    for _ in range(B):
+        x = x + delta*v/2           # Move to midpoint
+        g = grad_log_pi(x)          # Compute gradient at midpoint
+        Sg = S(x) @ g
+        v = v - 2*(v @ g) * Sg / (g @ Sg) # Reflect velocity using midpoint gradient
+        x = x + delta*v/2           # Move from midpoint to end-point
+    # Unsqueeze the velocity
+    g = grad_log_pi(x)
+    Sg = S(x) @ g
+    v = v + (alpha / (1 - alpha)) * (v @ g) * Sg / (g @ Sg)
+    if logu <= logpi(x) + q.logpdf(v) - logpi(x0) - q.logpdf(v0s):
+        return x, 1, None, None, None
+    else:
+        return x0, 0, None, None, None
+
+
 def Hug(x0, T, B, N, q, logpi, grad_log_pi):
     """
     Standard Hug Kernel.

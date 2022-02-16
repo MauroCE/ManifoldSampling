@@ -1,63 +1,97 @@
 import numpy as np
 from numpy import arange, ones, array, zeros, concatenate, hstack, unique
-from numpy import quantile, cov, eye, log, ceil, exp, clip
-from numpy.linalg import cholesky
+from numpy import quantile, cov, eye, log, ceil, exp, clip, errstate, vstack
+from numpy import array_equal
+from numpy.linalg import cholesky, norm
 from numpy.random import choice, uniform
+from scipy.stats import multivariate_normal as MVN
+from time import time
 
 from tangential_hug_functions import HugStepEJSD_Deterministic
+from tangential_hug_functions import HugTangentialStepEJSD
+from tangential_hug_functions import HugTangentialPCStep
 
 
 class SMCTHUG:
-    def __init__(self, N, d, ystar, ϵmin=None, pmin=None, tolscheme='unique', η=0.9, ϵmax=1.0, mcmc_iter=5, iterscheme='fixed', propPmoved=0.99, initStep=0.2, minstep=0.1, maxstep=1.0):
+    def __init__(self, N, d, ystar, logprior, ϵmin=None, pmin=0.2, pter=0.01, tolscheme='unique', η=0.9, mcmc_iter=5, iterscheme='fixed', propPmoved=0.99, δ0=0.2, minstep=0.1, maxstep=100.0, a_star=0.3, B=5, manual_initialization=False, maxiter=300, maxMCMC=10, precondition=False):
         """SMC sampler using Hug/Thug kernel.
         N     : Number of particles
         d     : dimensionality of each particle
         ystar : Observed data for ABC
+        logprior : Evaluates log prior at ξ
         ϵmin  : minimum tolerance. When we reach a smaller tolerance, we stop.
-        pmin  : minimum acceptance prob. When we reach a smaller prob, we stop.
+        pmin  : minimum acceptance prob we aim for. This is used to tune step size.
+        pter  : terminal acceptance prob. When we go below this, then we stop. Used in stopping criterion.
         tolscheme : Either 'unique' or 'ess'. Determines how next ϵ is chosen.
         η     : quantile to use when determining a tolerance.
-        ϵmax  : maximum tolerance, used during tolscheme.
         mcmc_iter : Initial number of MCMC iterations for each particle.
         iterscheme : Whether to keep a fixed number of mcmc_iter per particle
                      or to find it adaptively using estimate acceptance probability.
                      Choose between 'fixed' and 'adaptive'.
-        initStep : Initial step size for MCMC kernel.
+        δ0      : Initial step size for THUG kernel.
         minstep : minimum step size for adaptive step size finding.
         maxstep : maximum stepsize for adaptive step size finding.
+        B : Number of bounces in Thug
+        manual_initialization : If true then user can set self.initialize_particles
+                                to a custom function instead of initializing from
+                                the prior.
+        maxiter: Maximum number of SMC iterations. Used in self.stopping_criterion
+        maxMCMC: Maximum number of MCMC steps. Used when iterscheme='adaptive'
+        precondition: Boolean. Whether at each step we use ThugPC or Thug.
         """
         # Store variables
         self.d = d                      # Dimensionality of each particle
         self.ystar = ystar              # Observed data
         self.ϵmin = ϵmin                # Lowest tolerance (for stopping)
-        self.ϵmax = ϵmax                # Max tol for tol schedule
         self.pmin = pmin                # Minimum acceptance prob (for stopping)
+        self.pter = pter
         self.t = 0                      # Initialize iteration to 0
         self.η = η                      # Quantile for ϵ scheme
+        self.a_star = a_star            # Target acceptance probability
         self.pPmoved = propPmoved       # Proportion of particles moved
+        self.α = 0.01                   # Initial squeezing parameter
+        self.B = 5
+        self.q = MVN(zeros(self.d), eye(self.d))
+        self.mcmc_iter = mcmc_iter
+        self.N = N
+        self.minstep = minstep
+        self.maxstep = maxstep
+        self.manual_initialization = manual_initialization
+        self.maxiter = maxiter
+        self.total_time = 0.0
+        self.maxMCMC = maxMCMC
+        self.precondition = precondition
 
         # Initialize arrays
         self.W       = zeros((N, 1))           # Normalized weights
         self.D       = zeros((N, 1))           # Distances
-        self.A       = zeros((N, 1))           # Ancestors
+        self.A       = zeros((N, 1), dtype=int)           # Ancestors
         self.P       = zeros((N, self.d, 1))   # Particles
         self.EPSILON = [np.inf]                # ϵ for all iterations
         self.ESS     = [0.0]                   # ESS
         self.n_unique_particles = [0.0]
         self.n_unique_starting = []
-        self.accepted = zeros(N)               # accepted MCMC steps (?)
+        self.accepted = zeros((N, 1))          # proportion of accepted thug steps within self.THUG
         self.MCMC_iter = [mcmc_iter]           # MCMC iterations per particle (K in Chang's code)
         self.accprob = [1.0]                   # Current acceptance probability
-        self.step_sizes = [initStep]           # Tracks step sizes
+        self.step_sizes = [δ0]                 # Tracks step sizes
+        self.ALPHAS = [self.α]                 # Tracks the α for THUG
+
+        # Store log prior
+        self.logprior = logprior
+        self.Σ = eye(self.d)
+        self.Σfunc = lambda x: self.Σ
 
 
         # Set stopping criterion or raise an error
-        if ϵmax is not None:
+        if ϵmin is not None:
             self.stopping_criterion = self.min_tolerance
-        elif pmin is not None:
+            print("### Stopping Criterion: Minimum Tolerance {}".format(ϵmin))
+        elif pter is not None:
             self.stopping_criterion = self.min_acc_prob
+            print("### Stopping Criterion: Terminal Accept Probability {}".format(pter))
         else:
-            raise NotImplementedError("You must set one of `ϵmax` or `pmin`.")
+            raise NotImplementedError("You must set one of `ϵmin` or `pter`.")
 
         # Set tolerance scheme
         if tolscheme == 'unique':
@@ -69,61 +103,127 @@ class SMCTHUG:
 
         # Set iteration scheme
         if iterscheme == 'fixed':
-            self.compute_n_mcmc_iterations = self.fixed_n_mcmc()
+            self.compute_n_mcmc_iterations = self.fixed_n_mcmc
         elif iterscheme == 'adaptive':
-            self.compute_n_mcmc_iterations = self.adaptive_n_mcmc()
+            self.compute_n_mcmc_iterations = self.adaptive_n_mcmc
         else:
             raise NotImplementedError("You must set `iterscheme` to either `fixed` or `adaptive`.")
 
-    def sample_prior(self):
-        """Samples xi = (theta, z) from prior distribution.
-        This is the prior of G and K model.""".
-        theta = uniform(low=0.0, high=10.0, size=4)
-        z = randn(self.d - 4)
-        return concatenate((theta, z))
-
-    def min_tolerance(self): return self.EPSILON[-1] > self.ϵmin
-    def min_acc_prob(self):  return self.accprob[-1] > self.pmin
-
-    def unique_tol_scheme(self): return max(self.ϵmax, quantile(unique(self.D[self.A[:, -1], -1]), self.η))
-    def ess_tol_scheme(self):    return max(self.ϵmax, quantile(self.D[self.A[:, -1], -1], self.η))
-
-    def fixed_n_mcmc(self):    return self.mcmc
-    def adaptive_n_mcmc(self): return int(ceil(log(1 - self.pPmoved) / log(1 - self.accprob[-1])))
+        # Set THUG kernel
+        if precondition:
+            self.THUGkernel = HugTangentialPCStep
+            self.THUG_args = lambda x0, B: (x0, B * self.step_sizes[-1], B, self.Σfunc, self.α, self.q, self.logpi, self.grad_h)
+            self.estimateΣ = lambda: cov(self.P[self.W[:, -2] > 0, :, -2].T) + 1e-8*eye(self.d)
+        else:
+            self.THUGkernel = HugTangentialStepEJSD
+            self.THUG_args = lambda x0, B: (x0, B * self.step_sizes[-1], B, self.α, self.q, self.logpi, self.grad_h)
+            self.estimateΣ = lambda: eye(self.d)
 
     @staticmethod
-    def h(ξ_matrix, ystar):
+    def sample_prior():
+        """Samples xi = (theta, z) from prior distribution."""
+        raise NotImplementedError
+
+    def min_tolerance(self): return (self.EPSILON[-1] > self.ϵmin) and (self.t < self.maxiter)
+    def min_acc_prob(self):  return (self.accprob[-1] > self.pter) and (self.t < self.maxiter)
+
+    def unique_tol_scheme(self): return max(self.ϵmin, quantile(unique(self.D[self.A[:, -1], -1]), self.η))
+    def ess_tol_scheme(self):    return max(self.ϵmin, quantile(self.D[self.A[:, -1], -1], self.η))
+
+    def fixed_n_mcmc(self):    return self.mcmc_iter
+    def adaptive_n_mcmc(self): return min(self.maxMCMC, int(ceil(log(1 - self.pPmoved) / log(1 - self.accprob[-1]))))
+
+    @staticmethod
+    def h(ξ, ystar):
+        """Computes ||f(xi) - y*||"""
+        raise NotImplementedError
+
+    @staticmethod
+    def h_broadcast(ξ_matrix, ystar):
         """Computes ||f_broadcast(xi) - y*||"""
-        pass
+        raise NotImplementedError
+
+    def logkernel(self, ξ):
+        """Kernel used for logpi. Epanechnikov in this case."""
+        u = self.h(ξ, self.ystar)
+        ϵ = self.EPSILON[self.t]
+        with errstate(divide='ignore'):
+            return log((3*(1 - (u**2 / (ϵ**2))) / (4*ϵ)) * float(u <= ϵ))
+
+    def logpi(self, ξ):
+        """Target distribution."""
+        return self.logprior(ξ) + self.logkernel(ξ)
 
     @staticmethod
     def grad_h(ξ):
         """Computes the gradient of h(xi). Used by HUG/THUG."""
-        pass
+        raise NotImplementedError
 
     def compute_distances(self, flag=None):
         """Computes distance between all particles and ystar. If `flag` is
         provided, then it only computes the distance of the particles
         whose flag is True."""
-        if ix is None:
-            return self.h(self.P[:, :, -1], self.ystar)
+        if flag is None:
+            return self.h_broadcast(self.P[:, :, -1], self.ystar)
         else:
-            return self.h(self.P[flag, :, -1], self.ystar)
+            return self.h_broadcast(self.P[flag, :, -1], self.ystar)
+
+    def compute_distance(self, ix):
+        """Computes distance between ix particle and ystar."""
+        return self.h(self.P[ix, :, -1], self.ystar)
+
+    @staticmethod
+    def get_γ(i):
+        """User needs to set this method. Returns the step size for the α update."""
+        raise NotImplementedError
+
+    def update_α(self, a_hat, i):
+        """Updates α based on current acceptance probability"""
+        τ = log(self.α / (1 - self.α))
+        γ = self.get_γ(i)
+        τ = τ - γ*(a_hat - self.a_star)
+        self.α = np.clip(1 / (1 + exp(-τ)), 0.0, 0.999)
 
     def resample(self):
         """Resamples indeces of particles"""
-        return choice(arange(self.N), size=N, replace=True, p=self.W[:, -1])
+        return choice(arange(self.N), size=self.N, replace=True, p=self.W[:, -1])
 
-    def THUG():
+    # def THUG(self, x0, B):
+    #     """HUG/THUG kernel."""
+    #     # T can be determined using the step size (determined via acceptance prob)
+    #     samples = x0
+    #     x = x0
+    #     n_accepted = 0
+    #     for i in range(N):
+    #         x, a, _, _, _, = HugTangentialStepEJSD(x, B * self.step_sizes[-1], B, self.α, self.q, self.logpi, self.grad_h) ## self.B
+    #         samples = vstack((samples, x))
+    #         n_accepted += a
+    #     return x, n_accepted / N
+    def THUG(self, x0, B):
         """HUG/THUG kernel."""
-        HugStepEJSD_Deterministic(x0, v0, logu, T, B, q, logpi, self.grad_h)
-        pass
+        x, a, _, _, _ = self.THUGkernel(*self.THUG_args(x0, B))
+        return x, a
+
+    @staticmethod
+    def initialize_particles(N):
+        """Can be used to initialize particles in a different way"""
+        raise NotImplementedError("If manual_initialization=True then you must provide initialize_particles.")
 
     def sample(self):
-        # Initialize particles
-        for i in range(self.N):
-            self.P[i, :, 0] = self.sample_prior()  # Sample particles from prior
-            self.W[i, 0]    = 1 / self.N           # Assign uniform weights
+        initial_time = time()
+        # Initialize particles either manually
+        if self.manual_initialization:
+            particles = self.initialize_particles(self.N)
+            for i in range(self.N):
+                self.P[i, :, 0] = particles[i, :]
+                self.W[i, 0]    = 1 / self.N
+            print("Particles have been initialized manually.")
+        else:
+            # or automatically from the prior
+            for i in range(self.N):
+                self.P[i, :, 0] = self.sample_prior()  # Sample particles from prior
+                self.W[i, 0]    = 1 / self.N           # Assign uniform weights
+            print("Particles have been initialized from the prior.")
 
         # Compute distances. Use largest distance as current ϵ
         self.D[:, 0]    = self.compute_distances() # Compute distances
@@ -134,17 +234,18 @@ class SMCTHUG:
         # Run Algorithm until stopping criteria is met
         while self.stopping_criterion():
             # RESAMPLING
-            self.A[:, t] = self.resample()
+            self.A[:, self.t] = self.resample()
             self.t += 1
 
             # SELECT TOLERANCE
             self.EPSILON.append(self.tol_scheme())
 
             # ADD ZERO-COLUMN TO ALL MATRICES FOR STORAGE OF THIS ITERATION
-            self.A = hstack(self.A, zeros((self.N, 1)))
-            self.D = hstack(self.D, zeros((self.N, 1)))
-            self.W = hstack(self.W, zeros((self.N, 1)))
-            self.P = concatenate((self.P, zeros((self.N, self.d))), axis=2)
+            self.A = hstack((self.A, zeros((self.N, 1), dtype=int)))
+            self.D = hstack((self.D, zeros((self.N, 1))))
+            self.W = hstack((self.W, zeros((self.N, 1))))
+            self.P = concatenate((self.P, zeros((self.N, self.d, 1))), axis=2)
+            self.accepted = hstack((self.accepted, zeros((self.N, 1))))
 
             # COMPUTE WEIGHTS
             self.W[:, -1] = self.D[self.A[:, -2], -2] < self.EPSILON[-1]
@@ -158,28 +259,38 @@ class SMCTHUG:
             print("ϵ = ", round(self.EPSILON[-1], 5), " N unique starting: ", self.n_unique_starting[-1])
 
             # COMPUTE COVARIANCE MATRIX (d x d) from previous weights
-            Σ = cov(self.P[self.W[:, -2] > 0, :, -2].T) + 1e-8*eye(self.d)
-            A = cholesky(Σ)
+            self.Σ = self.estimateΣ()
 
             # METROPOLIS-HASTINGS - MOVE ALIVE PARTICLES
-            print("Metropolis-Hastings step.")
+            print("Metropolis-Hastings steps: ", self.MCMC_iter[-1])
             alive = self.W[:, -1] > 0.0     # Boolean flag for alive particles
             index = np.where(alive)[0]      # Indices for alive particles
             for ix in index:
-                self.P[ix, :, -1], self.accepted[ix] = self.THUG()
-                self.D[ix, -1]    = self.compute_distances(flag=alive)
+                self.P[ix, :, -1], self.accepted[ix, -1] = self.THUG(self.P[self.A[ix, -2], :, -2], self.MCMC_iter[-1])
+                self.D[ix, -1] = self.compute_distance(ix)
             self.n_unique_particles.append(len(unique(self.D[alive, -1])))
 
             # ESTIMATE ACCEPTANCE PROBABILITY
-            self.accprob.append(self.accepted[alive].mean() / self.MCMC_iter[-1])
+            self.accprob.append(self.accepted[:, -1].mean())  #accepted[alive]?
             self.MCMC_iter.append(self.compute_n_mcmc_iterations())
             print("Average Acceptance Probability: ", self.accprob[-1])
 
             # TUNE STEP SIZE
-            self.step_sizes.append(clip(exp(log(self.step_sizes[-1]) + 0.5*(self.accprob[-1] - self.pmin)), minstep, maxstep))
+            self.step_sizes.append(clip(exp(log(self.step_sizes[-1]) + 0.5*(self.accprob[-1] - self.pmin)), self.minstep, self.maxstep))
             print("Stepsize used in next SMC iteration: ", self.step_sizes[-1])
 
-            if self.EPSILON[-1] == self.ϵmax: break
+            # TUNE SQUEEZING PARAMETER FOR THUG
+            self.update_α(self.accprob[-1], self.t)
+            # if self.EPSILON[-1] < 0.5:
+            #     self.α = 0.9
+            self.ALPHAS.append(self.α)
+            print("Alpha used in next SMC iteration: ", self.α)
+
+            if self.EPSILON[-1] == self.ϵmin:
+                print("Latest ϵ == ϵmin. Breaking")
+                break
+
+        self.total_time = time() - initial_time
 
         return {
             'P': self.P,
@@ -189,8 +300,20 @@ class SMCTHUG:
             'EPSILON': self.EPSILON,
             'AP': self.accprob,
             'MCMC_ITERS': self.MCMC_iter[:-1],
-            'STEP_SIZES': self.step_sizes,
+            'STEP_SIZES': self.step_sizes[:-1],
             'ESS': self.ESS,
             'UNIQUE_PARTICLES': self.n_unique_particles,
-            'UINQUE_STARTING': self.n_unique_starting
+            'UNIQUE_STARTING': self.n_unique_starting,
+            'ALPHAS': self.ALPHAS,
+            'TIME': self.total_time
         }
+
+
+
+def computational_cost(smc_output):
+    T = len(smc_output['EPSILON']) - 1
+    cost = 0
+    for n in range(T):
+        cost += np.sum(smc_output['W'][:, n+1] > 0) * smc_output['MCMC_ITERS'][n]
+    number_of_produced_samples = np.sum(smc_output['W'][:, -1] > 0)
+    return cost / number_of_produced_samples

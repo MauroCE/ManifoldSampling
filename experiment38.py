@@ -76,7 +76,7 @@ if __name__ == "__main__":
     EPSILONS = [0.001, 0.0000001, 0.0000000001] #[0.001, 0.00001, 0.0000001]
     N_EPSILON = len(EPSILONS)
 
-    N_RUNS = 10
+    N_RUNS = 50
     ALPHAS = [0.9, 0.99, 0.999]
     if len(ALPHAS) != len(EPSILONS):
         raise ValueError("The number of alphas should be the same as epsilons")
@@ -213,7 +213,7 @@ if __name__ == "__main__":
     print("Total time: ", time.time() - initial_time)
 
     ### SAVE ONTO FOLDER
-    folder = "dumper7/" #"experiment38/"
+    folder = "experiment38/"
 
     save(folder + "N_CONSTR_EVAL_CHMC.npy", N_CONSTR_EVAL_CHMC)
     save(folder + "N_JAC_CONSTR_CHMC.npy", N_JAC_CONSTR_CHMC)
