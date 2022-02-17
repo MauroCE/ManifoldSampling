@@ -7,13 +7,15 @@ from numpy.random import choice, uniform
 from scipy.stats import multivariate_normal as MVN
 from time import time
 
-from tangential_hug_functions import HugStepEJSD_Deterministic
 from tangential_hug_functions import HugTangentialStepEJSD
 from tangential_hug_functions import HugTangentialPCStep
+from tangential_hug_functions import HugTangential
+
+from RWM import RWM, RWM_Cov
 
 
 class SMCTHUG:
-    def __init__(self, N, d, ystar, logprior, ϵmin=None, pmin=0.2, pter=0.01, tolscheme='unique', η=0.9, mcmc_iter=5, iterscheme='fixed', propPmoved=0.99, δ0=0.2, minstep=0.1, maxstep=100.0, a_star=0.3, B=5, manual_initialization=False, maxiter=300, maxMCMC=10, precondition=False):
+    def __init__(self, N, d, ystar, logprior, ϵmin=None, pmin=0.2, pter=0.01, tolscheme='unique', η=0.9, mcmc_iter=5, iterscheme='fixed', propPmoved=0.99, δ0=0.2, minstep=0.1, maxstep=100.0, a_star=0.3, B=5, manual_initialization=False, maxiter=300, maxMCMC=10, precondition=False, thug=True):
         """SMC sampler using Hug/Thug kernel.
         N     : Number of particles
         d     : dimensionality of each particle
@@ -38,6 +40,7 @@ class SMCTHUG:
         maxiter: Maximum number of SMC iterations. Used in self.stopping_criterion
         maxMCMC: Maximum number of MCMC steps. Used when iterscheme='adaptive'
         precondition: Boolean. Whether at each step we use ThugPC or Thug.
+        thug: Boolean. Whether we are using a HUG/THUG kernel or a RWM.
         """
         # Store variables
         self.d = d                      # Dimensionality of each particle
@@ -61,6 +64,7 @@ class SMCTHUG:
         self.total_time = 0.0
         self.maxMCMC = maxMCMC
         self.precondition = precondition
+        self.thug = thug
 
         # Initialize arrays
         self.W       = zeros((N, 1))           # Normalized weights
@@ -110,14 +114,25 @@ class SMCTHUG:
             raise NotImplementedError("You must set `iterscheme` to either `fixed` or `adaptive`.")
 
         # Set THUG kernel
-        if precondition:
-            self.THUGkernel = HugTangentialPCStep
-            self.THUG_args = lambda x0, B: (x0, B * self.step_sizes[-1], B, self.Σfunc, self.α, self.q, self.logpi, self.grad_h)
-            self.estimateΣ = lambda: cov(self.P[self.W[:, -2] > 0, :, -2].T) + 1e-8*eye(self.d)
+        if thug:
+            if precondition:
+                self.MCMCkernel = lambda *args: HugTangentialPCStep(*args)[:2]
+                self.MCMC_args  = lambda x0, B: (x0, B * self.step_sizes[-1], B, self.Σfunc, self.α, self.q, self.logpi, self.grad_h)
+                self.estimateΣ  = lambda: cov(self.P[self.W[:, -2] > 0, :, -2].T) + 1e-8*eye(self.d)
+            else:
+                self.MCMCkernel = lambda *args: HugTangentialStepEJSD(*args)[:2]
+                self.MCMC_args  = lambda x0, B: (x0, B * self.step_sizes[-1], B, self.α, self.q, self.logpi, self.grad_h)
+                self.estimateΣ  = lambda: eye(self.d)
+        # Or Random Walk
         else:
-            self.THUGkernel = HugTangentialStepEJSD
-            self.THUG_args = lambda x0, B: (x0, B * self.step_sizes[-1], B, self.α, self.q, self.logpi, self.grad_h)
-            self.estimateΣ = lambda: eye(self.d)
+            if precondition:
+                self.MCMCkernel = RWM
+                self.MCMC_args  = lambda x0, N: (x0, self.step_sizes[-1], N, self.logpi)
+                self.estimateΣ  = lambda: cov(self.P[self.W[:, -2] > 0, :, -2].T) + 1e-8*eye(self.d)
+            else:
+                self.MCMCkernel = RWM_Cov
+                self.MCMC_args  = lambda x0, N: (x0, self.Σfunc(), N, self.logpi)
+                self.estimateΣ  = lambda: eye(self.d)
 
     @staticmethod
     def sample_prior():
@@ -188,20 +203,9 @@ class SMCTHUG:
         """Resamples indeces of particles"""
         return choice(arange(self.N), size=self.N, replace=True, p=self.W[:, -1])
 
-    # def THUG(self, x0, B):
-    #     """HUG/THUG kernel."""
-    #     # T can be determined using the step size (determined via acceptance prob)
-    #     samples = x0
-    #     x = x0
-    #     n_accepted = 0
-    #     for i in range(N):
-    #         x, a, _, _, _, = HugTangentialStepEJSD(x, B * self.step_sizes[-1], B, self.α, self.q, self.logpi, self.grad_h) ## self.B
-    #         samples = vstack((samples, x))
-    #         n_accepted += a
-    #     return x, n_accepted / N
     def THUG(self, x0, B):
         """HUG/THUG kernel."""
-        x, a, _, _, _ = self.THUGkernel(*self.THUG_args(x0, B))
+        x, a, _, _, _ = self.MCMCkernel(*self.THUG_args(x0, B))
         return x, a
 
     @staticmethod
@@ -217,13 +221,13 @@ class SMCTHUG:
             for i in range(self.N):
                 self.P[i, :, 0] = particles[i, :]
                 self.W[i, 0]    = 1 / self.N
-            print("Particles have been initialized manually.")
+            print("### Particles have been initialized manually.")
         else:
             # or automatically from the prior
             for i in range(self.N):
                 self.P[i, :, 0] = self.sample_prior()  # Sample particles from prior
                 self.W[i, 0]    = 1 / self.N           # Assign uniform weights
-            print("Particles have been initialized from the prior.")
+            print("### Particles have been initialized from the prior.")
 
         # Compute distances. Use largest distance as current ϵ
         self.D[:, 0]    = self.compute_distances() # Compute distances
@@ -254,9 +258,9 @@ class SMCTHUG:
             # COMPUTE ESS
             self.ESS.append(1 / (self.W[:, -1]**2).sum())
 
-            print("SMC step: ", self.t)
+            print("\n### SMC step: ", self.t)
             self.n_unique_starting.append(len(unique(self.D[self.A[:, -2], -2])))
-            print("ϵ = ", round(self.EPSILON[-1], 5), " N unique starting: ", self.n_unique_starting[-1])
+            print("ϵ = {:.10f}\t N unique starting: {}".format(round(self.EPSILON[-1], 5), self.n_unique_starting[-1]))
 
             # COMPUTE COVARIANCE MATRIX (d x d) from previous weights
             self.Σ = self.estimateΣ()
@@ -266,25 +270,26 @@ class SMCTHUG:
             alive = self.W[:, -1] > 0.0     # Boolean flag for alive particles
             index = np.where(alive)[0]      # Indices for alive particles
             for ix in index:
-                self.P[ix, :, -1], self.accepted[ix, -1] = self.THUG(self.P[self.A[ix, -2], :, -2], self.MCMC_iter[-1])
+                #self.P[ix, :, -1], self.accepted[ix, -1] = self.THUG(self.P[self.A[ix, -2], :, -2], self.MCMC_iter[-1])
+                self.P[ix, :, -1], self.accepted[ix, -1] = self.MCMCkernel(*self.MCMC_args(self.P[self.A[ix, -2], :, -2], self.MCMC_iter[-1]))
                 self.D[ix, -1] = self.compute_distance(ix)
             self.n_unique_particles.append(len(unique(self.D[alive, -1])))
 
             # ESTIMATE ACCEPTANCE PROBABILITY
             self.accprob.append(self.accepted[:, -1].mean())  #accepted[alive]?
             self.MCMC_iter.append(self.compute_n_mcmc_iterations())
-            print("Average Acceptance Probability: ", self.accprob[-1])
+            print("Average Acceptance Probability: {:.4f}".format(self.accprob[-1]))
 
             # TUNE STEP SIZE
             self.step_sizes.append(clip(exp(log(self.step_sizes[-1]) + 0.5*(self.accprob[-1] - self.pmin)), self.minstep, self.maxstep))
-            print("Stepsize used in next SMC iteration: ", self.step_sizes[-1])
+            print("Stepsize used in next SMC iteration: {:.4f}".format(self.step_sizes[-1]))
 
             # TUNE SQUEEZING PARAMETER FOR THUG
             self.update_α(self.accprob[-1], self.t)
             # if self.EPSILON[-1] < 0.5:
             #     self.α = 0.9
             self.ALPHAS.append(self.α)
-            print("Alpha used in next SMC iteration: ", self.α)
+            print("Alpha used in next SMC iteration: {:.4f}".format(self.α))
 
             if self.EPSILON[-1] == self.ϵmin:
                 print("Latest ϵ == ϵmin. Breaking")
