@@ -54,9 +54,7 @@ class SMCTHUG:
         self.η = η                      # Quantile for ϵ scheme
         self.a_star = a_star            # Target acceptance probability
         self.pPmoved = propPmoved       # Proportion of particles moved
-        ### TODO: Need to set α = 0.0 even for thug=true and !force_hug and use the Hug kernel
-        # Then I need to change the Hug kernel to Thug once α > 0.0 for the first time.
-        self.α = 0.0 #if (force_hug or not thug) else 0.01  # Initial squeezing parameter
+        self.α = 0.0 if (force_hug or not thug) else 0.01  # Initial squeezing parameter
         self.B = B
         self.q = MVN(zeros(self.d), eye(self.d))
         self.mcmc_iter = mcmc_iter
