@@ -70,3 +70,11 @@ def grad_FL(ξ, σ):
     """Gradient of the function Gσ with respect to """
     return array([12*ξ[0]**3 - 6*ξ[0], 2*ξ[1], σ])
 
+def hess_FL(ξ, σ):
+    """Hessian of the function."""
+    return array([
+        [36*ξ[0]**2-6, 0, 0],
+        [0, 2, 0],
+        [0, 0, 0]
+    ])
+
