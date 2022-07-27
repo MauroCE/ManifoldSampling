@@ -1,8 +1,9 @@
+from pyparsing import alphanums
 from Manifolds.GeneralizedEllipse import GeneralizedEllipse
 import numpy as np
 from numpy.lib.twodim_base import eye
 from numpy.linalg import norm, solve, cholesky, det
-from scipy.linalg import solve_triangular
+from scipy.linalg import solve_triangular, qr
 from numpy.random import rand
 from scipy.stats import multivariate_normal
 from Manifolds.RotatedEllipse import RotatedEllipse
@@ -39,6 +40,44 @@ def HugTangential(x0, T, B, N, alpha, q, logpi, grad_log_pi):
         g = g / norm(g)
         v = v + (alpha / (1 - alpha)) * g * (g @ v)
         # In the acceptance ratio must use spherical velocities!! Hence v0s and the unsqueezed v
+        if logu <= logpi(x) + q.logpdf(v) - logpi(x0) - q.logpdf(v0s):
+            samples = np.vstack((samples, x))
+            acceptances[i] = 1         # Accepted!
+            x0 = x
+        else:
+            samples = np.vstack((samples, x0))
+            acceptances[i] = 0         # Rejected
+    return samples[1:], acceptances
+
+
+def HugTangentialMultivariate(x0, T, B, N, α, q, logpi, jac, method='qr'):
+    """Multidimensional Tangential Hug sampler. Two possible methods:
+    - 'qr': projects onto row space of Jacobian using QR decomposition.
+    - 'linear': solves a linear system to project.
+    """
+    assert method == 'qr' or method == 'linear'
+    def qr_project(v, J):
+        """Projects using QR decomposition."""
+        Q, _ = qr(J.T, mode='economic')
+        return Q @ (Q.T @ v)
+    def linear_project(v, J):
+        """Projects by solving linear system."""
+        return J.T @ solve(J @ J.T, J @ v)
+    project = qr_project if method == 'qr' else linear_project
+    samples, acceptances = x0, np.zeros(N)
+    for i in range(N):
+        v0s = q.rvs()
+        # Squeeze
+        v0 = v0s - α * project(v0s, jac(x0))
+        v, x = v0, x0
+        logu = np.log(rand())
+        δ = T / B
+        for _ in range(B):
+            x = x + δ*v/2
+            v = v - 2 * project(v, jac(x))
+            x = x + δ*v/2
+        # Unsqueeze
+        v = v + (α / (1 - α)) * project(v, jac(x))
         if logu <= logpi(x) + q.logpdf(v) - logpi(x0) - q.logpdf(v0s):
             samples = np.vstack((samples, x))
             acceptances[i] = 1         # Accepted!
