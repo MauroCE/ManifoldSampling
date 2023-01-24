@@ -406,3 +406,9 @@ def compute_arviz_miness_runtime(chains, times):
     stacked = np.vstack([chain.reshape(1, n_samples, -1) for chain in chains])
     dataset = convert_to_dataset(stacked)
     return min(np.array(ess_arviz(dataset).to_array()).flatten()) / np.mean(times)
+
+
+def generate_powers_of_ten(max_exponent, min_exponent):
+    """E.g. generate_powers_of_ten(2, -1) will return 100, 10, 0, 0.1."""
+    number_of_powers = max_exponent + abs(min_exponent) + 1
+    return np.logspace(start=max_exponent, stop=min_exponent, num=number_of_powers, endpoint=True)
