@@ -24,6 +24,6 @@ class gk(Manifold):
     
     def q(self, T):
         """Constraint function for the g-and-k model with data observed y_star"""
-        return T[0]+T[1]*T[5]*(1+T[5]**2)**(T[4])*(1+np.tanh(T[5]*T[3]/2))- ystar
+        return T[0]+T[1]*T[5]*(1+T[5]**2)**(T[4])*(1+np.tanh(T[5]*T[3]/2))- self.ystar
 
     

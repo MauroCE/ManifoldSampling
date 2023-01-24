@@ -1,6 +1,7 @@
 import numpy as np
 from numpy import log
 from numpy import pi
+from numpy import array
 from numpy.linalg import det, inv, solve
 from scipy.optimize import fsolve
 from scipy.stats import multivariate_normal as MVN

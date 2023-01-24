@@ -16,7 +16,7 @@ from RWM import RWM, RWM_Cov
 
 
 class SMCTHUG:
-    def __init__(self, N, d, ystar, logprior, ϵmin=None, pmin=0.2, pter=0.01, tolscheme='unique', η=0.9, mcmc_iter=5, iterscheme='fixed', propPmoved=0.99, δ0=0.2, minstep=0.1, maxstep=100.0, a_star=0.3, B=5, manual_initialization=False, maxiter=300, maxMCMC=10, precondition=False, thug=True, force_hug=False):
+    def __init__(self, N, d, ystar, logprior, ϵmin=None, pmin=0.2, pter=0.01, tolscheme='unique', η=0.9, mcmc_iter=5, iterscheme='fixed', propPmoved=0.99, δ0=0.2, minstep=0.1, maxstep=100.0, a_star=0.3, B=5, manual_initialization=False, maxiter=300, maxMCMC=10, precondition=False, thug=True, force_hug=False, both_stopping_criterions=False, αmax=0.999, αmin=0.01):
         """SMC sampler using Hug/Thug kernel.
         N     : Number of particles
         d     : dimensionality of each particle
@@ -68,6 +68,9 @@ class SMCTHUG:
         self.precondition = precondition
         self.thug = thug
         self.force_hug = force_hug
+        self.αmax = αmax
+        self.αmin = αmin
+        self.both_stopping_criterions = both_stopping_criterions
 
         # Initialize arrays
         self.W       = zeros((N, 1))           # Normalized weights
@@ -94,14 +97,18 @@ class SMCTHUG:
             raise ValueError("`force_hug` can only be set to True if `thug` is also set to True.")
 
         # Set stopping criterion or raise an error
-        if ϵmin is not None:
-            self.stopping_criterion = self.min_tolerance
-            print("### Stopping Criterion: Minimum Tolerance {}".format(ϵmin))
-        elif pter is not None:
-            self.stopping_criterion = self.min_acc_prob
-            print("### Stopping Criterion: Terminal Accept Probability {}".format(pter))
+        if not self.both_stopping_criterions:
+            if ϵmin is not None:
+                self.stopping_criterion = self.min_tolerance
+                print("### Stopping Criterion: Minimum Tolerance {}".format(ϵmin))
+            elif pter is not None:
+                self.stopping_criterion = self.min_acc_prob
+                print("### Stopping Criterion: Terminal Accept Probability {}".format(pter))
+            else:
+                raise NotImplementedError("You must set one of `ϵmin` or `pter`.")
         else:
-            raise NotImplementedError("You must set one of `ϵmin` or `pter`.")
+            print("### Stopping Criterion: Minimum Tolerance {} and Terminal Acceptance Probability {}.".format(ϵmin, pter))
+            self.stopping_criterion = self.min_tolernace_and_acc_prob
 
         # Set tolerance scheme
         if tolscheme == 'unique':
@@ -169,6 +176,7 @@ class SMCTHUG:
 
     def min_tolerance(self): return (self.EPSILON[-1] > self.ϵmin) and (self.t < self.maxiter)
     def min_acc_prob(self):  return (self.accprob[-1] > self.pter) and (self.t < self.maxiter)
+    def min_tolernace_and_acc_prob(self): return (self.EPSILON[-1] > self.ϵmin) and (self.accprob[-1] > self.pter) and (self.t < self.maxiter)
 
     def unique_tol_scheme(self): return max(self.ϵmin, quantile(unique(self.D[self.A[:, -1], -1]), self.η))
     def ess_tol_scheme(self):    return max(self.ϵmin, quantile(self.D[self.A[:, -1], -1], self.η))
@@ -225,7 +233,7 @@ class SMCTHUG:
         τ = log(self.α / (1 - self.α))
         γ = self.get_γ(i)
         τ = τ - γ*(a_hat - self.a_star)
-        self.α = np.clip(1 / (1 + exp(-τ)), 0.0, 0.999)
+        self.α = np.clip(1 / (1 + exp(-τ)), self.αmin, self.αmax)
 
     def resample(self):
         """Resamples indeces of particles"""
@@ -300,8 +308,12 @@ class SMCTHUG:
 
             # ESTIMATE ACCEPTANCE PROBABILITY
             self.accprob.append(self.avg_acc_prob_within_MCMC[:, -1].mean())
-            self.MCMC_iter.append(self.compute_n_mcmc_iterations())
-            print("Average Acceptance Probability: {:.4f}".format(self.accprob[-1]))
+            try:
+                self.MCMC_iter.append(self.compute_n_mcmc_iterations())
+                print("Average Acceptance Probability: {:.4f}".format(self.accprob[-1]))
+            except OverflowError:
+                print("Failed to compute n_mcmc_iterations. Current accept probability is likely 0.0. Exiting. ")
+                break
 
             # TUNE STEP SIZE
             self.step_sizes.append(clip(exp(log(self.step_sizes[-1]) + 0.5*(self.accprob[-1] - self.pmin)), self.minstep, self.maxstep))

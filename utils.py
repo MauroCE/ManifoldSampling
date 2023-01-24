@@ -8,6 +8,8 @@ from scipy.stats import gaussian_kde
 from scipy.stats import expon
 from oct2py import octave
 import tensorflow_probability as tfp
+from arviz import ess as ess_arviz
+from arviz import convert_to_dataset
 
 
 def logf(xyz):
@@ -377,3 +379,30 @@ def ar_and_var_change_for_hug_thug(x0, T, B, N, αs, q, logπ, grad_logπ, Hug, 
 invert_sign = lambda x: 1*x - 2*x
 
 rangeof = lambda x: (np.min(x), np.max(x))
+
+
+def line_perp_v_through_point(v, point, xvalues):
+    """Returns yvalues corresponding to xvalues for a line perpendicular to v and passing through point. Example:
+    plt.plot(xvalues, *line_perp_v_through_point(v, x, xvalues))
+    """
+    m = - v[0] / v[1]
+    q = (v @ point) / v[1]
+    return m*xvalues + q
+
+
+def line_between(point1, point2):
+    """Returns array that can be used to plot line between point1 and point2. Example: 
+    ```
+    plt.plot(*line_between(point1, point2), color='k', lw=2)
+    ```
+    """
+    return np.vstack((point1, point2)).T
+
+
+def compute_arviz_miness_runtime(chains, times):
+    """Computes minESS/runtime. Expects chains=[samples, samples, ...] and times = [time, time, ...]."""
+    assert np.all([chain.shape == chains[0].shape for chain in chains]), "Chains must have same dimensions."
+    n_samples = len(chains[0])
+    stacked = np.vstack([chain.reshape(1, n_samples, -1) for chain in chains])
+    dataset = convert_to_dataset(stacked)
+    return min(np.array(ess_arviz(dataset).to_array()).flatten()) / np.mean(times)

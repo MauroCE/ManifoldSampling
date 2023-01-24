@@ -3,14 +3,91 @@ from Manifolds.GeneralizedEllipse import GeneralizedEllipse
 import numpy as np
 from numpy.lib.twodim_base import eye
 from numpy.linalg import norm, solve, cholesky, det
-from scipy.linalg import solve_triangular, qr
+from scipy.linalg import solve_triangular, qr, lstsq
 from numpy.random import rand
 from scipy.stats import multivariate_normal
 from Manifolds.RotatedEllipse import RotatedEllipse
 from Zappa.zappa import zappa_step_accept, zappa_step_acceptPC
 import time
 from numpy.random import uniform
+from warnings import catch_warnings, filterwarnings
 # numpy version 1.19.5 worked
+
+
+def HugTangentialMultivariateSafe(x0, T, B, N, α, q, logpi, jac, method='qr', return_n_grad=False, verbose=False):
+    """This version is safe meaning that if during the bounces one of the jacobians runs into a runtime warning,
+    we simply reject and try again. 
+    - 'qr': projects onto row space of Jacobian using QR decomposition.
+    - 'linear': solves a linear system to project.
+    """
+    assert method == 'qr' or method == 'linear' or method == 'lstsq'
+    verboseprint = print if verbose else lambda *a, **k: None
+    def qr_project(v, J):
+        """Projects using QR decomposition."""
+        Q, _ = qr(J.T, mode='economic')
+        return Q.dot((Q.T.dot(v)))
+    def linear_project(v, J):
+        """Projects by solving linear system."""
+        return J.T.dot(solve(J.dot(J.T), J.dot(v)))
+    def lstsq_project(v, J):
+        """Projects using scipy's Least Squares Routine."""
+        return J.T.dot(lstsq(J.T, v)[0])
+    if method == 'qr':
+        project = qr_project
+    elif method == 'linear':
+        project = linear_project
+    else:
+        project = lstsq_project
+    # Jacobian function raising an error for RuntimeWarning
+    # def safe_jac(x):
+    #     """Raises an error when a RuntimeWarning appears."""
+    #     while catch_warnings():
+    #         filterwarnings('error')
+    #         try:
+    #             return jac(x)
+    #         except RuntimeWarning:
+    #             raise ValueError("Jacobian computation failed due to Runtime Warning.")
+    samples, acceptances = x0, np.zeros(N)
+    # Compute initial Jacobian. 
+    n_grad_computations = 0
+    for i in range(N):
+        v0s = q.rvs()
+        # Squeeze
+        v0 = v0s - α * project(v0s, jac(x0)) #jac(x0))
+        n_grad_computations += int(α > 0)
+        v, x = v0, x0
+        logu = np.log(rand())
+        δ = T / B
+        with catch_warnings():
+            filterwarnings('error')
+            try:
+                for _ in range(B):
+                    x = x + δ*v/2
+                    v = v - 2 * project(v, jac(x)) #jac(x))
+                    n_grad_computations += 1
+                    x = x + δ*v/2
+                # Unsqueeze
+                v = v + (α / (1 - α)) * project(v, jac(x)) #jac(x))
+                n_grad_computations += int(α > 0)
+                if logu <= logpi(x) + q.logpdf(v) - logpi(x0) - q.logpdf(v0s):
+                    samples = np.vstack((samples, x))
+                    acceptances[i] = 1         # Accepted!
+                    x0 = x
+                else:
+                    samples = np.vstack((samples, x0))
+                    acceptances[i] = 0         # Rejected
+            except (RuntimeWarning, ValueError) as e:
+                verboseprint("Iteration ", i, " rejected due to: ", e)
+                samples = np.vstack((samples, x0))
+                acceptances[i] = 0
+    if return_n_grad:
+        return samples[1:], acceptances, n_grad_computations
+    else: 
+        return samples[1:], acceptances
+
+
+
+
 
 
 def HugTangential(x0, T, B, N, alpha, q, logpi, grad_log_pi):
@@ -50,34 +127,56 @@ def HugTangential(x0, T, B, N, alpha, q, logpi, grad_log_pi):
     return samples[1:], acceptances
 
 
-def HugTangentialMultivariate(x0, T, B, N, α, q, logpi, jac, method='qr'):
+def HugTangentialMultivariate(x0, T, B, N, α, q, logpi, jac, method='qr', return_n_grad=False):
     """Multidimensional Tangential Hug sampler. Two possible methods:
     - 'qr': projects onto row space of Jacobian using QR decomposition.
     - 'linear': solves a linear system to project.
     """
-    assert method == 'qr' or method == 'linear'
+    assert method == 'qr' or method == 'linear' or method == 'lstsq'
     def qr_project(v, J):
         """Projects using QR decomposition."""
         Q, _ = qr(J.T, mode='economic')
-        return Q @ (Q.T @ v)
+        return Q.dot((Q.T.dot(v)))
     def linear_project(v, J):
         """Projects by solving linear system."""
-        return J.T @ solve(J @ J.T, J @ v)
-    project = qr_project if method == 'qr' else linear_project
+        return J.T.dot(solve(J.dot(J.T), J.dot(v)))
+    def lstsq_project(v, J):
+        """Projects using scipy's Least Squares Routine."""
+        return J.T.dot(lstsq(J.T, v)[0])
+    if method == 'qr':
+        project = qr_project
+    elif method == 'linear':
+        project = linear_project
+    else:
+        project = lstsq_project
+    # Jacobian function raising an error for RuntimeWarning
+    def safe_jac(x):
+        """Raises an error when a RuntimeWarning appears."""
+        while catch_warnings():
+            filterwarnings('error')
+            try:
+                return jac(x)
+            except RuntimeWarning:
+                raise ValueError("Jacobian computation failed due to Runtime Warning.")
     samples, acceptances = x0, np.zeros(N)
+    # Compute initial Jacobian. 
+    n_grad_computations = 0
     for i in range(N):
         v0s = q.rvs()
         # Squeeze
-        v0 = v0s - α * project(v0s, jac(x0))
+        v0 = v0s - α * project(v0s, safe_jac(x0)) #jac(x0))
+        n_grad_computations += int(α > 0)
         v, x = v0, x0
         logu = np.log(rand())
         δ = T / B
         for _ in range(B):
             x = x + δ*v/2
-            v = v - 2 * project(v, jac(x))
+            v = v - 2 * project(v, safe_jac(x)) #jac(x))
+            n_grad_computations += 1
             x = x + δ*v/2
         # Unsqueeze
-        v = v + (α / (1 - α)) * project(v, jac(x))
+        v = v + (α / (1 - α)) * project(v, safe_jac(x)) #jac(x))
+        n_grad_computations += int(α > 0)
         if logu <= logpi(x) + q.logpdf(v) - logpi(x0) - q.logpdf(v0s):
             samples = np.vstack((samples, x))
             acceptances[i] = 1         # Accepted!
@@ -85,7 +184,10 @@ def HugTangentialMultivariate(x0, T, B, N, α, q, logpi, jac, method='qr'):
         else:
             samples = np.vstack((samples, x0))
             acceptances[i] = 0         # Rejected
-    return samples[1:], acceptances
+    if return_n_grad:
+        return samples[1:], acceptances, n_grad_computations
+    else: 
+        return samples[1:], acceptances
 
 
 def HugTangentialCached(x0, T, B, N, alpha, q, logpi, grad_log_pi):
