@@ -63,8 +63,26 @@ class GKManifold(Manifold):
         logηϵ = lambda ξ: self.log_normal_kernel(ξ, ϵ) - ξ@ξ/2
         return logηϵ
 
-    def find_point_on_manifold():
-        pass
+    def find_point_on_manifold(self, maxiter=2000, tol=1e-14, random_z_guess=False):
+        """Finds a point on the Manifold."""
+        z_guess = randn(self.m) if random_z_guess else zeros(self.m)
+        i = 0
+        with catch_warnings():
+            filterwarnings('error')
+            while i <= maxiter:
+                i += 1
+                try: 
+                    # Sample theta from the prior
+                    
+                    u1_init  = randn(self.d)*0.1 - 4
+                    function = lambda u2: self.q(np.concatenate((u1_init, u2)))
+                    fprime   = lambda u2: self.J(np.concatenate((u1_init, u2)))[:, self.d:]
+                    u2_found = fsolve(function, u2_guess, xtol=tol, fprime=fprime)
+                    u_found = np.concatenate((u1_init, u2_found))
+                    return u_found
+                except RuntimeWarning:
+                    continue
+        raise ValueError("Couldn't find a point, try again.")
 
     def find_init_points_for_each_chain(self, theta_true=True, random_z_guess=False, tol=1e-14, maxiter=5000):
         """Finds `n_chains` initial points on the manifold.
