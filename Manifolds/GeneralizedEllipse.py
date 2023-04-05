@@ -39,14 +39,23 @@ class GeneralizedEllipse(Manifold):
         """Q"""
         return (2 * self.Sinv @ (xyz - self.mu)).reshape(-1, self.m)
 
-    def sample(self):
+    def sample(self, advanced=False, maxiter=10000):
         """Samples from the contour by first sampling a point from the original
         MVN and then it rescales it until it is on the correct contour. This should
         work since the MVN is spherically symmetric."""
-        start = self.MVN.rvs()   # Get initial MVN sample
+        if not advanced:
+            start = self.MVN.rvs()   # Get initial MVN sample
+        else:
+            start = self.find_point_near_manifold(maxiter=maxiter)
         objective = lambda coef: self.MVN.pdf(coef*start) - self.z  # Objective function checks closeness to z
         optimal_coef = fsolve(objective, 1.0) # Find coefficient so that optimal_coef*start is on contour
         return start * optimal_coef
+    
+    def find_point_near_manifold(self, maxiter=10000):
+        """Finds a point near the manifold"""
+        samples = self.MVN.rvs(maxiter)
+        index = np.argmin(abs(self.MVN.pdf(samples) - self.z))
+        return samples[index, :]
     
 
 class GeneralizedEllipsePC(Manifold):
