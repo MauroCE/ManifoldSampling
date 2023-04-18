@@ -124,8 +124,8 @@ def generate_logpi(ϵ):
 x0s = generate_starting_points(np.zeros(1))
 
 B = 10
-N_GRID = 30
-N = 20000
+N_GRID = 40
+N = 10000
 ϵ = 0.0001  ### smaller now!
 αs_eps0001 = np.linspace(start=0.0, stop=1.0, num=N_GRID, endpoint=False)
 δs_eps0001 = np.geomspace(start=0.05, stop=2.0, num=N_GRID, endpoint=True)
