@@ -322,8 +322,8 @@ class MSAdaptiveTolerancesSwitchIntegrator:
 
     def __init__(self, SETTINGS):
         """Markov Snippets sampler that starts with a RWM integrator and then switches
-        to THUG once the pseudo-acceptance probability falls below a threshold.
-        The sequence of target distributions is NOT fixed here. It is adaptively
+        to THUG once ϵ doesn't change more than a certain threshold. The sequence
+        of target distributions is NOT fixed here. It is adaptively
         chosen based on the distribution of distances at the previous round, i.e.
         we choose a small quantile of all the distances.
 
@@ -360,7 +360,7 @@ class MSAdaptiveTolerancesSwitchIntegrator:
         self.ϵmin = SETTINGS['ϵmin']
         self.maxiter = SETTINGS['maxiter']
         self.quantile_value = SETTINGS['quantile_value']
-        self.ap_switch = SETTINGS['ap_switch'] # once AP below this, switch to THUG
+        self.ϵprop_switch = SETTINGS['ϵprop_switch'] # once below this, switch to THUG
 
         # Check arguments
         assert isinstance(self.N,  int), "N must be an integer."
@@ -372,8 +372,8 @@ class MSAdaptiveTolerancesSwitchIntegrator:
         assert isinstance(self.maxiter, int), "maxiter must be an integer."
         assert isinstance(self.quantile_value, float), "quantile_value must be float."
         assert self.quantile_value >= 0 and self.quantile_value <= 1, "quantile value must be in [0, 1]."
-        assert isinstance(self.ap_switch, float), "ap_switch must be float."
-        assert self.ap_switch >=0 and self.ap_switch <= 1, "ap_switch must be in [0, 1]."
+        assert isinstance(self.ϵprop_switch, float), "ap_switch must be float."
+        assert self.ϵprop_switch >=0 and self.ϵprop_switch <= 1, "ap_switch must be in [0, 1]."
 
         # Initialize the arrays storing ϵ and logηϵ as empty. If we initialize
         # from a small ϵ0 then we add it (and the corresponding logηϵ0) to the
@@ -382,7 +382,7 @@ class MSAdaptiveTolerancesSwitchIntegrator:
         self.log_ηs = []
 
         # Start with RWM integrator, then switch to THUG
-        self.verboseprint("Integrator: RWM. Will switch to THUG once AP <= {:.3f}".format(self.ap_switch))
+        self.verboseprint("Integrator: RWM. Will switch to THUG once ϵprop <= {:.3f}".format(self.ϵprop_switch))
         self.ψ      = generate_RWMIntegrator(self.B, self.δ)
         self.ψ_thug = generate_THUGIntegrator(self.B, self.δ, self.manifold.fullJacobian)
 
@@ -475,7 +475,10 @@ class MSAdaptiveTolerancesSwitchIntegrator:
                 self.verboseprint("\tProp Moved: {:.3f}".format(self.prop_moved[-1]))
 
                 # Check if it's time to switch to THUG integrator
-                if self.prop_moved <= self.ap_switch:
+                # we need to check n >= 2 because if we initialize from the prior
+                # then -np.inf at the denominator would blow everything up
+                if (n >= 2):
+                    if (self.ϵs[-2] - self.ϵs[-1]) / self.ϵs[-2] <= self.ϵprop_switch:
                     self.ψ = self.ψ_thug
                     self.verboseprint("### SWITCHING TO THUG INTEGRATOR ###")
 
