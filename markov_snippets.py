@@ -479,8 +479,8 @@ class MSAdaptiveTolerancesSwitchIntegrator:
                 # then -np.inf at the denominator would blow everything up
                 if (n >= 2):
                     if (self.ϵs[-2] - self.ϵs[-1]) / self.ϵs[-2] <= self.ϵprop_switch:
-                    self.ψ = self.ψ_thug
-                    self.verboseprint("### SWITCHING TO THUG INTEGRATOR ###")
+                        self.ψ = self.ψ_thug
+                        self.verboseprint("### SWITCHING TO THUG INTEGRATOR ###")
 
                 n += 1
             self.total_time = time() - starting_time
