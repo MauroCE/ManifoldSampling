@@ -255,6 +255,8 @@ class MSAdaptiveTolerances:
         self.DISTANCES = zeros(self.N*(self.B+1))
         self.ESS  = [self.N]
         self.K_RESAMPLED = zeros(self.N)
+        # Store proxy metrics for acceptance probabilities
+        self.prop_moved = [] # Stores the proportion of particles with k >= 1
         # Initialize particles
         z = self.initialize_particles()   # (N, 2d)
         self.ZN[0] = z
@@ -303,6 +305,10 @@ class MSAdaptiveTolerances:
                 z[:, self.d:] = normal(loc=0.0, scale=1.0, size=(self.N, self.d))
                 self.ZN = vstack((self.ZN, z[None, ...]))
                 self.verboseprint("\tVelocities refreshed.")
+
+                # Compute proxy acceptance probabilities
+                self.prop_moved.append(sum(self.K_RESAMPLED[-1] >= 1) / (self.N*self.B))
+                self.verboseprint("\tProp Moved: {:.3f}".format(self.prop_moved[-1]))
 
                 n += 1
             self.total_time = time() - starting_time
