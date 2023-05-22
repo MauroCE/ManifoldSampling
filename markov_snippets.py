@@ -263,7 +263,7 @@ class MSAdaptiveTolerances:
         # Keep running until an error arises or we reach ϵ_min
         n = 1
         try:
-            while n <= self.maxiter:
+            while (n <= self.maxiter) or abs(self.ϵs[-1]) <= self.ϵmin:
                 self.verboseprint("Iteration: ", n)
                 # Compute trajectories
                 Z = apply_along_axis(self.ψ, 1, z)                                        # (N, B+1, 2d)
@@ -442,7 +442,7 @@ class MSAdaptiveTolerancesSwitchIntegrator:
         # Keep running until an error arises or we reach ϵ_min
         n = 1
         try:
-            while n <= self.maxiter:
+            while (n <= self.maxiter) or abs(self.ϵs[-1]) <= self.ϵmin:
                 self.verboseprint("Iteration: ", n)
                 # Compute trajectories
                 Z = apply_along_axis(self.ψ, 1, z)                                        # (N, B+1, 2d)
@@ -634,7 +634,7 @@ class MSAdaptiveTolerancesAdaptiveδ:
         # Keep running until an error arises or we reach ϵ_min
         n = 1
         try:
-            while n <= self.maxiter:
+            while (n <= self.maxiter) or abs(self.ϵs[-1]) <= self.ϵmin:
                 self.verboseprint("Iteration: ", n)
                 # Compute trajectories
                 Z = apply_along_axis(self.ψ, 1, z)                                        # (N, B+1, 2d)
@@ -832,7 +832,7 @@ class MSAdaptiveTolerancesAdaptiveδSwitchIntegrator:
         # Keep running until an error arises or we reach ϵ_min
         n = 1
         try:
-            while n <= self.maxiter:
+            while (n <= self.maxiter) or abs(self.ϵs[-1]) <= self.ϵmin: # use abs to avoid -np.inf messing things up
                 self.verboseprint("Iteration: ", n)
                 # Compute trajectories
                 Z = apply_along_axis(self.ψ, 1, z)                                        # (N, B+1, 2d)
