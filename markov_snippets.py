@@ -4,7 +4,7 @@ Various functions and classes for Markov Snippets.
 import numpy as np
 from numpy import zeros, hstack, arange, repeat, log, concatenate, eye
 from numpy import apply_along_axis, exp, unravel_index, dstack, vstack, ndarray
-from numpy import quantile, unique
+from numpy import quantile, unique, clip
 from numpy.linalg import solve, norm
 from numpy.random import rand, choice, normal, randn
 from scipy.stats import multivariate_normal as MVN
@@ -581,7 +581,7 @@ class MSAdaptiveTolerancesAdaptiveδ:
         # list below. Otherwise, we consider it -np.inf and use the prior instead.
         self.ϵs     = []
         self.log_ηs = []
-        self.δs     = SETTINGS['δ']
+        self.δs     = [SETTINGS['δ']]
 
         # Choose correct integrator based on user input
         if self.thug:
@@ -682,7 +682,7 @@ class MSAdaptiveTolerancesAdaptiveδ:
                 self.verboseprint("\tProp Moved: {:.3f}".format(self.prop_moved[-1]))
 
                 # Adapt δ based on proxy acceptance probability
-                self.δ = clip(exp(log(self.δ) + 0.5*(self.prop_moved - self.ap_target)), self.δmin, self.δmax)
+                self.δ = clip(exp(log(self.δ) + 0.5*(self.prop_moved[-1] - self.ap_target)), self.δmin, self.δmax)
                 self.δs.append(self.δ)
                 self.ψ = self.ψ_generator(self.B, self.δ)
                 self.verboseprint("\tStep-size adapted to: {:.8f}".format(self.δ))
