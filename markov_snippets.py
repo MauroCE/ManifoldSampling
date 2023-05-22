@@ -693,8 +693,215 @@ class MSAdaptiveTolerancesAdaptiveδ:
             print("ValueError was raised: ", e)
         return z
 
+######## ADAPTIVE TOLERANCES, SWITCH INTEGRATOR, ADAPTIVE STEP SIZE ##########
 
+class MSAdaptiveTolerancesAdaptiveδSwitchIntegrator:
 
+    def __init__(self, SETTINGS):
+        """Markov Snippets sampler that starts with a RWM integrator and then switches
+        to THUG once ϵ doesn't change more than a certain threshold. The sequence
+        of target distributions is NOT fixed here. It is adaptively
+        chosen based on the distribution of distances at the previous round, i.e.
+        we choose a small quantile of all the distances. Here we also adapt the
+        step size δ based on the proxy acceptance probability and a target
+        acceptance probability.
+
+        Tolerances
+        ----------
+        Adaptively chosen.
+
+        Initialization
+        --------------
+        We allow for multiple initialization procedures.
+            1. init_RWMϵ0:  Starting from x0 ∈ Manifold, sample from ηϵ0 using RWM
+                            with some thinning and some burn-in.
+            2. init_THUGϵ0: Starting from x0 ∈ Manifold, sample from ηϵ0 using THUG
+                            with some thinning and some burn-in.
+            3. init_prior: Sample from the prior.
+
+        Parameters
+        ----------
+
+        :param SETTINGS: Dictionary containing various variables necessary for
+                         running the Markov Snippets algorithm.
+        :type SETTINGS: dict
+        """
+        # Store variables
+        self.N  = SETTINGS['N']       # Number of particles
+        self.B  = SETTINGS['B']       # Number of integration steps
+        self.δ  = SETTINGS['δ']       # Step-size for each integration step
+        self.d  = SETTINGS['d']       # Dim of x-component of particle
+        self.manifold = SETTINGS['manifold']
+        self.SETTINGS = SETTINGS
+        self.verbose = SETTINGS['verbose']
+        self.verboseprint = print if self.verbose else lambda *a, **k: None
+        self.initialization = SETTINGS['initialization']
+        self.ϵmin = SETTINGS['ϵmin']
+        self.maxiter = SETTINGS['maxiter']
+        self.quantile_value = SETTINGS['quantile_value']
+        self.switch_strategy = SETTINGS['switch_strategy']
+        self.ϵprop_switch = SETTINGS['ϵprop_switch'] # once below this, switch to THUG
+        self.pmoved_switch = SETTINGS['pmoved_switch']
+        self.ap_target = SETTINGS['ap_target']  # target acceptance probability used to adapt δ
+        self.δmin = SETTINGS['δmin']
+        self.δmax = SETTINGS['δmax'] # both used for adaptation
+
+        # Check arguments
+        assert isinstance(self.N,  int), "N must be an integer."
+        assert isinstance(self.B, int), "B must be an integer."
+        assert isinstance(self.δ, float), "δ must be a float."
+        assert isinstance(self.d, int), "d must be an integer."
+        assert isinstance(self.initialization, str), "initialization must be a string."
+        assert isinstance(self.ϵmin, float), "ϵmin must be a float."
+        assert isinstance(self.maxiter, int), "maxiter must be an integer."
+        assert isinstance(self.quantile_value, float), "quantile_value must be float."
+        assert self.quantile_value >= 0 and self.quantile_value <= 1, "quantile value must be in [0, 1]."
+        assert isinstance(self.ϵprop_switch, float), "ap_switch must be float."
+        assert self.ϵprop_switch >=0 and self.ϵprop_switch <= 1, "ap_switch must be in [0, 1]."
+        assert isinstance(self.pmoved_switch, float), "pmoved_switch must be float."
+        assert self.pmoved_switch >=0 and self.pmoved_switch <= 1, "pmoved_switch must be in [0, 1]."
+        assert self.switch_strategy in ['ϵprop', 'ap'], "switch strategy must be either `ϵprop` or `ap`."
+        assert isinstance(self.ap_target, float), "ap_target must be float."
+        assert self.ap_target >= 0 and self.ap_target <= 1, "ap_target must be in [0, 1]."
+        assert isinstance(self.δmin, float), "δmin must be float."
+        assert isinstance(self.δmax, float), "δmax, must be float."
+        assert (0 <= self.δmin) and (self.δmin <= self.δmax), "step sizes must be positive and ordered."
+
+        # Initialize the arrays storing ϵ and logηϵ as empty. If we initialize
+        # from a small ϵ0 then we add it (and the corresponding logηϵ0) to the
+        # list below. Otherwise, we consider it -np.inf and use the prior instead.
+        self.ϵs     = []
+        self.log_ηs = []
+        self.switched = False
+        self.δs     = [SETTINGS['δ']]
+
+        # Start with RWM integrator, then switch to THUG
+        self.verboseprint("Integrator: RWM. Switching strategy: ", self.switch_strategy)
+        self.ψ           = generate_RWMIntegrator(self.B, self.δ)
+        self.ψ_generator = generate_RWMIntegrator
+        self.ψ_thug = generate_THUGIntegrator(self.B, self.δ, self.manifold.fullJacobian)
+
+        # Choose initialization procedure
+        if self.initialization == 'init_RWMϵ0':
+            self.initializer = init_RWMϵ0
+            self.ϵs.append(SETTINGS['ϵ0'])
+            self.log_ηs.append(FilamentaryDistribution(self.manifold.generate_logηϵ, self.ϵs[0]))
+        elif self.initialization == 'init_THUGϵ0':
+            self.initializer = init_THUGϵ0
+            self.ϵs.append(SETTINGS['ϵ0'])
+            self.log_ηs.append(FilamentaryDistribution(self.manifold.generate_logηϵ, self.ϵs[0]))
+        elif self.initialization == 'init_prior':
+            self.initializer = init_prior
+            self.ϵs.append(-np.inf)
+            self.log_ηs.append(FilamentaryDistribution(self.manifold.generate_logprior, -np.inf))
+        else:
+            raise ValueError("Initializer must be one of three options.")
+
+    def initialize_particles(self):
+        """Initializes based on the user input. 3 options available, see docs."""
+        z0 = self.initializer(self)
+        return z0
+
+    def switch_integrator(self, n):
+        """Switches from RWM to THUG."""
+        self.ψ           = self.ψ_thug
+        self.ψ_generator = lambda B, δ: generate_THUGIntegrator(B, δ, self.manifold.fullJacobian)
+        self.n_switch = n  # store when the switch happens
+        self.switched = True
+        self.verboseprint("####################################")
+        self.verboseprint("### SWITCHING TO THUG INTEGRATOR ###")
+        self.verboseprint("####################################")
+
+    def sample(self):
+        """Starts the Markov Snippets sampler."""
+        starting_time = time()
+        ## Storage
+        #### Store z_n^{(i)}
+        self.ZN  = zeros((1, self.N, 2*self.d))
+        #### Store z_{n, k}^{(i)} so basically all the N(T+1) particles
+        self.ZNK  = zeros((1, self.N*(self.B+1), 2*self.d))
+        self.Wbar = zeros(self.N*(self.B+1))
+        self.DISTANCES = zeros(self.N*(self.B+1))
+        self.ESS  = [self.N]
+        self.K_RESAMPLED = zeros(self.N)
+        # Store proxy metrics for acceptance probabilities
+        self.prop_moved = [] # Stores the proportion of particles with k >= 1
+        # Initialize particles
+        z = self.initialize_particles()   # (N, 2d)
+        self.ZN[0] = z
+        # Keep running until an error arises or we reach ϵ_min
+        n = 1
+        try:
+            while n <= self.maxiter:
+                self.verboseprint("Iteration: ", n)
+                # Compute trajectories
+                Z = apply_along_axis(self.ψ, 1, z)                                        # (N, B+1, 2d)
+                self.ZNK = vstack((self.ZNK, Z.reshape(1, self.N*(self.B+1), 2*self.d)))  # (N(B+1), 2d)
+                self.verboseprint("\tTrajectories constructed.")
+
+                # Adaptively choose ϵ
+                distances = norm(apply_along_axis(self.manifold.q, 1, self.ZNK[-1][:, :self.d]), axis=1)
+                self.DISTANCES = vstack((self.DISTANCES, distances))
+                ϵ = max(self.ϵmin, quantile(unique(distances), self.quantile_value))
+                self.ϵs.append(ϵ)
+                self.log_ηs.append(FilamentaryDistribution(self.manifold.generate_logηϵ, ϵ))
+                self.verboseprint("\tEpsilon: {:.6f}".format(ϵ))
+
+                # Compute weights.
+                #### Log-Denominator: shared for each point in the same trajectory
+                log_μnm1_z  = apply_along_axis(self.log_ηs[-2], 1, Z[:, 0, :self.d])        # (N, )
+                log_μnm1_z  = repeat(log_μnm1_z, self.B+1, axis=0).reshape(self.N, self.B+1) # (N, B+1)
+                #### Log-Numerator: different for each point on a trajectory.
+                log_μn_ψk_z = apply_along_axis(self.log_ηs[-1], 2, Z[:, :, :self.d])          # (N, B+1)
+                #### Put weights together
+                W = exp(log_μn_ψk_z - log_μnm1_z)                                            # (N, B+1)
+                #### Normalize weights
+                W = W / W.sum()
+                self.verboseprint("\tWeights computed and normalized.")
+                # store weights (remember these are \bar{w})
+                self.Wbar = vstack((self.Wbar, W.flatten()))
+                # compute ESS
+                self.ESS.append(1 / np.sum(W**2))
+                # Resample down to N particles
+                resampling_indeces = choice(a=arange(self.N*(self.B+1)), size=self.N, p=W.flatten())
+                unravelled_indeces = unravel_index(resampling_indeces, (self.N, self.B+1))
+                self.K_RESAMPLED = vstack((self.K_RESAMPLED, unravelled_indeces[1]))
+                indeces = dstack(unravelled_indeces).squeeze()
+                z = vstack([Z[tuple(ix)] for ix in indeces])     # (N, 2d)
+                self.verboseprint("\tParticles Resampled.")
+
+                # Rejuvenate velocities of N particles
+                z[:, self.d:] = normal(loc=0.0, scale=1.0, size=(self.N, self.d))
+                self.ZN = vstack((self.ZN, z[None, ...]))
+                self.verboseprint("\tVelocities refreshed.")
+
+                # Compute proxy acceptance probabilities
+                self.prop_moved.append(sum(self.K_RESAMPLED[-1] >= 1) / self.N)
+                self.verboseprint("\tProp Moved: {:.3f}".format(self.prop_moved[-1]))
+
+                # Adapt δ based on proxy acceptance probability
+                self.δ = clip(exp(log(self.δ) + 0.5*(self.prop_moved[-1] - self.ap_target)), self.δmin, self.δmax)
+                self.δs.append(self.δ)
+                self.ψ = self.ψ_generator(self.B, self.δ)
+                self.verboseprint("\tStep-size adapted to: {:.8f}".format(self.δ))
+
+                # Check if it's time to switch to THUG integrator
+                # we need to check n >= 2 because if we initialize from the prior
+                # then -np.inf at the denominator would blow everything up
+                if not self.switched:
+                    if self.switch_strategy == 'ϵprop':
+                        if (n >= 2):
+                            if ((self.ϵs[-2] - self.ϵs[-1]) / self.ϵs[-2]) <= self.ϵprop_switch:
+                                self.switch_integrator(n)
+                    else:
+                        if self.prop_moved[-1] <= self.pmoved_switch:
+                            self.switch_integrator(n)
+
+                n += 1
+            self.total_time = time() - starting_time
+        except ValueError as e:
+            print("ValueError was raised: ", e)
+        return z
 
 
 
