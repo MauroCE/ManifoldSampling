@@ -307,7 +307,7 @@ class MSAdaptiveTolerances:
                 self.verboseprint("\tVelocities refreshed.")
 
                 # Compute proxy acceptance probabilities
-                self.prop_moved.append(sum(self.K_RESAMPLED[-1] >= 1) / (self.N*self.B))
+                self.prop_moved.append(sum(self.K_RESAMPLED[-1] >= 1) / self.N)
                 self.verboseprint("\tProp Moved: {:.3f}".format(self.prop_moved[-1]))
 
                 n += 1
