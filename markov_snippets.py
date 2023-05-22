@@ -360,7 +360,9 @@ class MSAdaptiveTolerancesSwitchIntegrator:
         self.ϵmin = SETTINGS['ϵmin']
         self.maxiter = SETTINGS['maxiter']
         self.quantile_value = SETTINGS['quantile_value']
+        self.switch_strategy = SETTINGS['switch_strategy']
         self.ϵprop_switch = SETTINGS['ϵprop_switch'] # once below this, switch to THUG
+        self.pmoved_switch = SETTINGS['pmoved_switch']
 
         # Check arguments
         assert isinstance(self.N,  int), "N must be an integer."
@@ -374,15 +376,19 @@ class MSAdaptiveTolerancesSwitchIntegrator:
         assert self.quantile_value >= 0 and self.quantile_value <= 1, "quantile value must be in [0, 1]."
         assert isinstance(self.ϵprop_switch, float), "ap_switch must be float."
         assert self.ϵprop_switch >=0 and self.ϵprop_switch <= 1, "ap_switch must be in [0, 1]."
+        assert isinstance(self.pmoved_switch, float), "pmoved_switch must be float."
+        assert self.pmoved_switch >=0 and self.pmoved_switch <= 1, "pmoved_switch must be in [0, 1]."
+        assert self.switch_strategy in ['ϵprop', 'ap'], "switch strategy must be either `ϵprop` or `ap`."
 
         # Initialize the arrays storing ϵ and logηϵ as empty. If we initialize
         # from a small ϵ0 then we add it (and the corresponding logηϵ0) to the
         # list below. Otherwise, we consider it -np.inf and use the prior instead.
         self.ϵs     = []
         self.log_ηs = []
+        self.switched = False
 
         # Start with RWM integrator, then switch to THUG
-        self.verboseprint("Integrator: RWM. Will switch to THUG once ϵprop <= {:.3f}".format(self.ϵprop_switch))
+        self.verboseprint("Integrator: RWM. Will switch to THUG once ϵprop <= {:.8f}".format(self.ϵprop_switch))
         self.ψ      = generate_RWMIntegrator(self.B, self.δ)
         self.ψ_thug = generate_THUGIntegrator(self.B, self.δ, self.manifold.fullJacobian)
 
@@ -406,6 +412,15 @@ class MSAdaptiveTolerancesSwitchIntegrator:
         """Initializes based on the user input. 3 options available, see docs."""
         z0 = self.initializer(self)
         return z0
+
+    def switch_integrator(self, n):
+        """Switches from RWM to THUG."""
+        self.ψ = self.ψ_thug
+        self.n_switch = n  # store when the switch happens
+        self.switched = True
+        self.verboseprint("####################################")
+        self.verboseprint("### SWITCHING TO THUG INTEGRATOR ###")
+        self.verboseprint("####################################")
 
     def sample(self):
         """Starts the Markov Snippets sampler."""
@@ -477,10 +492,14 @@ class MSAdaptiveTolerancesSwitchIntegrator:
                 # Check if it's time to switch to THUG integrator
                 # we need to check n >= 2 because if we initialize from the prior
                 # then -np.inf at the denominator would blow everything up
-                if (n >= 2):
-                    if (self.ϵs[-2] - self.ϵs[-1]) / self.ϵs[-2] <= self.ϵprop_switch:
-                        self.ψ = self.ψ_thug
-                        self.verboseprint("### SWITCHING TO THUG INTEGRATOR ###")
+                if not self.switched:
+                    if self.switch_strategy == 'ϵprop':
+                        if (n >= 2):
+                            if ((self.ϵs[-2] - self.ϵs[-1]) / self.ϵs[-2]) <= self.ϵprop_switch:
+                                self.switch_integrator(n)
+                    else:
+                        if self.prop_moved <= self.pmoved_switch:
+                            self.switch_integrator(n)
 
                 n += 1
             self.total_time = time() - starting_time
