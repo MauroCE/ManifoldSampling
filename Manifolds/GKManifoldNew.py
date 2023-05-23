@@ -2,7 +2,7 @@
 Newer version of Manifold for G-and-K problem.
 """
 import numpy as np
-from numpy import r_, exp, log, vstack, eye, prod, zeros, isfinite, ones, diag
+from numpy import r_, exp, log, vstack, eye, prod, zeros, isfinite, ones, diag, pi
 from numpy.linalg import norm
 from numpy.random import default_rng, randn
 from scipy.optimize import fsolve
@@ -13,11 +13,17 @@ from scipy.stats import norm as ndist
 from scipy.stats import multivariate_normal as MVN
 from warnings import catch_warnings, filterwarnings, resetwarnings
 
+from autograd.numpy import concatenate as aconcatenate
+from autograd.scipy.special import erf as aerf
+from autograd.numpy import sqrt as asqrt
+from autograd.numpy import exp as aexp
+from autograd import jacobian
+
 from Manifolds.Manifold import Manifold
 
 
 class GKManifold(Manifold):
-    def __init__(self, ystar, kernel_type='normal'):
+    def __init__(self, ystar, kernel_type='normal', use_autograd=False):
         assert kernel_type in ['normal', 'uniform']
         self.m = len(ystar)            # Number constraints = dimensionality of the data
         self.d = 4                     # Manifold has dimension 4 (like the parameter θ)
@@ -28,6 +34,10 @@ class GKManifold(Manifold):
         self.G    = lambda θ: 10*ndtr(θ)
         # U(0, 10) ---> N(0, 1)
         self.Ginv = lambda θ: ndtri(θ/10)
+        # autograd jacobian
+        self.fullJacobianAutograd = jacobian(self.q_autograd_raw)
+        if use_autograd:
+            self.fullJacobian = self.fullJacobianAutograd
 
     def q(self, ξ):
         """Constraint for G and K."""
@@ -46,6 +56,23 @@ class GKManifold(Manifold):
         """Same as `_q_raw_uniform` except expects ξ[:4]~N(0,1)."""
         ξ = r_[self.G(ξ[:4]), ξ[4:]]
         return self._q_raw_uniform(ξ)
+
+    def q_autograd_raw(self, ξ):
+        """Raw version of the constraint function using autograd."""
+        # transform using G
+        ndtr_autograd = lambda θ: (aerf(θ/asqrt(2))+1)/2
+        G_autograd = lambda θ: 10*ndtr_autograd(θ)
+        ξ = aconcatenate((G_autograd(ξ[:4]), ξ[4:]))
+        return (ξ[0] + ξ[1]*(1 + 0.8*(1 - aexp(-ξ[2]*ξ[4:]))/(1 + aexp(-ξ[2]*ξ[4:]))) * ((1 + ξ[4:]**2)**ξ[3])*ξ[4:]) - self.ystar
+
+    def q_autograd(self, ξ):
+        """Add the catch warnings thing."""
+        with catch_warnings():
+            filterwarnings('error')
+            try:
+                return self.q_autograd_raw(ξ)
+            except RuntimeWarning:
+                raise ValueError("Constraint found Overflow warning.")
 
     def Q(self, ξ):
         """Transpose of Jacobian for G and K. """
