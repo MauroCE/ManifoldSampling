@@ -239,8 +239,8 @@ class MSAdaptiveTolerances:
             self.log_ηs.append(FilamentaryDistribution(self.manifold.generate_logηϵ, self.ϵs[0]))
         elif self.initialization == 'init_prior':
             self.initializer = init_prior
-            self.ϵs.append(-np.inf)
-            self.log_ηs.append(FilamentaryDistribution(self.manifold.generate_logprior, -np.inf))
+            # self.ϵs.append(-np.inf)
+            # self.log_ηs.append(FilamentaryDistribution(self.manifold.generate_logprior, -np.inf))
         elif self.initialization == 'init_on_manifold':
             self.initializer = init_on_manifold
             if self.init_manifold_prior:
@@ -274,6 +274,15 @@ class MSAdaptiveTolerances:
         # Initialize particles
         z = self.initialize_particles()   # (N, 2d)
         self.ZN[0] = z
+
+        # If initializing from the prior, we need to find ϵmax and set ϵ0 to it
+        if self.initialization == 'init_prior':
+            print("Setting initial epsilon to ϵmax.")
+            # compute distances
+            distances = norm(apply_along_axis(self.manifold.q, 1, z[:, :self.d]), axis=1)
+            ϵmax      = np.max(distances)
+            self.ϵs.append(ϵmax)
+            self.log_ηϵ.append(FilamentaryDistribution(self.manifold.generate_logηϵ, ϵmax))
         # Keep running until an error arises or we reach ϵ_min
         n = 1
         try:
@@ -1090,7 +1099,7 @@ class SMCAdaptiveTolerancesAdaptiveδ:
                 alive_indeces = np.where(alive)[0]      # Indices for alive particles
                 z_new         = deepcopy(z)
                 for ix in alive_indeces:
-                    z_new[ix] = M(z[ix])         
+                    z_new[ix] = M(z[ix])
                 # z_new = np.apply_along_axis(M, 1, z)                                    # (N, d)
                 self.verboseprint("\tMutation step done.")
 
