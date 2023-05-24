@@ -4,11 +4,13 @@ Various functions and classes for Markov Snippets.
 import numpy as np
 from numpy import zeros, hstack, arange, repeat, log, concatenate, eye, full
 from numpy import apply_along_axis, exp, unravel_index, dstack, vstack, ndarray
+from numpy import zeros_like
 from numpy import quantile, unique, clip
 from numpy.linalg import solve, norm
 from numpy.random import rand, choice, normal, randn
 from scipy.stats import multivariate_normal as MVN
 from time import time
+from copy import deepcopy
 
 from RWM import RWM
 from tangential_hug_functions import HugTangentialMultivariate
@@ -926,7 +928,7 @@ class MSAdaptiveTolerancesAdaptiveδSwitchIntegrator:
 
 ######## SEQUENTIAL MONTE CARLO WITH ADAPTIVE TOLERANCES ############
 
-class SMCAdaptiveTolerances:
+class SMCAdaptiveTolerancesAdaptiveδ:
 
     def __init__(self, SETTINGS):
         """SMC sampler that can choose between THUG or RWM kernels The sequence
@@ -969,6 +971,9 @@ class SMCAdaptiveTolerances:
         self.maxiter = SETTINGS['maxiter']
         self.quantile_value = SETTINGS['quantile_value']
         self.init_manifold_prior = SETTINGS['init_manifold_prior'] # if using init_on_manifold then can choose if they target the prior or the first ϵ
+        self.ap_target = SETTINGS['ap_target']
+        self.δmin = SETTINGS['δmin']
+        self.δmax = SETTINGS['δmax']
 
         # Check arguments
         assert isinstance(self.N,  int), "N must be an integer."
@@ -987,16 +992,15 @@ class SMCAdaptiveTolerances:
         # list below. Otherwise, we consider it -np.inf and use the prior instead.
         self.ϵs     = []
         self.log_ηs = []
+        self.q_dist = MVN(zeros(self.d), eye(self.d))
 
         # Choose correct integrator based on user input
         if self.thug:
-            self.verboseprint("Integrator: THUG.")
-            M = lambda z: THUG_MH(z, self.B, self.δ, self.log_ηs[n-1])
-            self.M_generator = lambda B, δ: lambda z:
-            self.ψ = generate_THUGIntegrator(self.B, self.δ, self.manifold.fullJacobian)
+            self.verboseprint("Kernel: THUG.")
+            self.MH_kernel = lambda x, B, δ, log_ηϵ: HugTangentialMultivariate(x, B*δ, δ, 1, 0.0, self.q_dist, log_ηϵ, self.manifold.fullJacobian)[0].flatten()
         else:
-            self.verboseprint("Integrator: RWM.")
-            self.ψ = generate_RWMIntegrator(self.B, self.δ)
+            self.verboseprint("Kernel: RWM.")
+            self.MH_kernel = lambda x, B, δ, log_ηϵ: RWM(x, B*δ, 1, log_ηϵ)[0].flatten()
 
         # Choose initialization procedure
         if self.initialization == 'init_RWMϵ0':
@@ -1009,8 +1013,8 @@ class SMCAdaptiveTolerances:
             self.log_ηs.append(FilamentaryDistribution(self.manifold.generate_logηϵ, self.ϵs[0]))
         elif self.initialization == 'init_prior':
             self.initializer = init_prior
-            self.ϵs.append(-np.inf)
-            self.log_ηs.append(FilamentaryDistribution(self.manifold.generate_logprior, -np.inf))
+            # self.ϵs.append(-np.inf)
+            # self.log_ηs.append(FilamentaryDistribution(self.manifold.generate_logprior, -np.inf))
         elif self.initialization == 'init_on_manifold':
             self.initializer = init_on_manifold
             if self.init_manifold_prior:
@@ -1028,171 +1032,83 @@ class SMCAdaptiveTolerances:
         return z0
 
     def sample(self):
-        """Starts the Markov Snippets sampler."""
+        """Starts the Markov Snippets sampler.
+
+        IMPORTANT: HERE THE PARTICLES CONSIST ONLY OF THE POSITIONS!!
+        """
         starting_time = time()
         # Initialize particles
-        z = self.initialize_particles()               # (N, 2d)
+        z = self.initialize_particles()[:, :self.d]               # (N, d)
         # STORAGE
-        self.PARTICLES = z[None, ...]                 # (1, N, 2d)
+        self.PARTICLES = z[None, ...]                 # (1, N, d)
         self.WEIGHTS   = full(self.N, 1 / self.N)     # (N, )
         self.ESS       = 1 / np.sum(self.WEIGHTS**2)  # (N, )
-        self.DISTANCES = norm(apply_along_axis(self.manifold.q, 1, z[:, :self.d]), axis=1) # (N, )
+        self.DISTANCES = norm(apply_along_axis(self.manifold.q, 1, z), axis=1) # (N, )
+        self.δs = [self.δ]
+        w = self.WEIGHTS
+
+        # INITIAL EPSILON IS MAX DISTANCE OF INITIAL PARTICLES
+        ϵmax = np.max(self.DISTANCES)  # ϵ0
+        self.ϵs.append(ϵmax)
+        self.log_ηs.append(FilamentaryDistribution(self.manifold.generate_logηϵ, ϵmax))
+        self.verboseprint("Initial Epsilon: {:.3f}", ϵmax)
         # Keep running until an error arises or we reach ϵ_min
         n = 1
         try:
             while (n <= self.maxiter) or abs(self.ϵs[-1]) <= self.ϵmin:
                 self.verboseprint("Iteration: ", n)
-                ### Mutation step:
-                ###### Refresh velocities
-                z[:, self.d:] = normal(loc=0.0, scale=1.0, size=(self.N, self.d))
-                ###### Mutate positions
-                M = lambda z: THUG_MH(z, self.B, self.δ, self.log_ηs[n-1])
-                Z = np.apply_along_axis(M, 1, z)
 
-                # Compute trajectories
-                Z = apply_along_axis(self.ψ, 1, z)                                        # (N, B+1, 2d)
-                self.ZNK = vstack((self.ZNK, Z.reshape(1, self.N*(self.B+1), 2*self.d)))  # (N(B+1), 2d)
-                self.verboseprint("\tTrajectories constructed.")
+                # RESAMPLE PARTICLES
+                indeces = choice(a=arange(self.N), size=self.N, p=w)
+                z = z[indeces, :]
+                self.verboseprint("\tParticles resampled.")
+                # self.PARTICLES = vstack((self.PARTICLES, z[None, ...]))
 
-                # Adaptively choose ϵ
-                distances = norm(apply_along_axis(self.manifold.q, 1, self.ZNK[-1][:, :self.d]), axis=1)
+                # SELECT TOLERANCE
+                distances = norm(apply_along_axis(self.manifold.q, 1, z), axis=1)
                 self.DISTANCES = vstack((self.DISTANCES, distances))
                 ϵ = max(self.ϵmin, quantile(unique(distances), self.quantile_value))
                 self.ϵs.append(ϵ)
                 self.log_ηs.append(FilamentaryDistribution(self.manifold.generate_logηϵ, ϵ))
                 self.verboseprint("\tEpsilon: {:.6f}".format(ϵ))
 
-                # Compute weights.
-                #### Log-Denominator: shared for each point in the same trajectory
-                log_μnm1_z  = apply_along_axis(self.log_ηs[-2], 1, Z[:, 0, :self.d])        # (N, )
-                log_μnm1_z  = repeat(log_μnm1_z, self.B+1, axis=0).reshape(self.N, self.B+1) # (N, B+1)
-                #### Log-Numerator: different for each point on a trajectory.
-                log_μn_ψk_z = apply_along_axis(self.log_ηs[-1], 2, Z[:, :, :self.d])          # (N, B+1)
-                #### Put weights together
-                W = exp(log_μn_ψk_z - log_μnm1_z)                                            # (N, B+1)
-                #### Normalize weights
-                W = W / W.sum()
-                self.verboseprint("\tWeights computed and normalized.")
-                # store weights (remember these are \bar{w})
-                self.Wbar = vstack((self.Wbar, W.flatten()))
-                # compute ESS
-                self.ESS.append(1 / np.sum(W**2))
-                # Resample down to N particles
-                resampling_indeces = choice(a=arange(self.N*(self.B+1)), size=self.N, p=W.flatten())
-                unravelled_indeces = unravel_index(resampling_indeces, (self.N, self.B+1))
-                self.K_RESAMPLED = vstack((self.K_RESAMPLED, unravelled_indeces[1]))
-                indeces = dstack(unravelled_indeces).squeeze()
-                z = vstack([Z[tuple(ix)] for ix in indeces])     # (N, 2d)
-                self.verboseprint("\tParticles Resampled.")
+                # COMPUTE WEIGHTS
+                # Notice in this case the weight is different because we are not using the uniform kernel anymore
+                # Importantly: this is now the INCREMENTAL weight and so has to be multiplied by the previous one.
+                # since we resample, no need to multiply #self.WEIGHTS[n-1] * w_incremental
+                w = exp(apply_along_axis(self.log_ηs[n], 1, z) - apply_along_axis(self.log_ηs[n-1], 1, z))
+                w = w / w.sum()
+                self.verboseprint("\tWeights computed and normalised.")
+                self.WEIGHTS = vstack((self.WEIGHTS, w))
+                self.ESS     = vstack((self.ESS, 1 / np.sum(w**2)))
 
-                # Rejuvenate velocities of N particles
-                z[:, self.d:] = normal(loc=0.0, scale=1.0, size=(self.N, self.d))
-                self.ZN = vstack((self.ZN, z[None, ...]))
-                self.verboseprint("\tVelocities refreshed.")
+                # MUTATION STEP
+                # With a uniform kernel, one should not propagate dead particles.
+                # This is tricky to code, but we shall try
+                M = lambda z: self.MH_kernel(z, self.B, self.δ, self.log_ηs[n])
+                alive         = self.WEIGHTS[-1] > 0.0
+                alive_indeces = np.where(alive)[0]      # Indices for alive particles
+                z_new         = deepcopy(z)
+                for ix in alive_indeces:
+                    z_new[ix] = M(z[ix])         
+                # z_new = np.apply_along_axis(M, 1, z)                                    # (N, d)
+                self.verboseprint("\tMutation step done.")
 
-                # Compute proxy acceptance probabilities
-                self.prop_moved.append(sum(self.K_RESAMPLED[-1] >= 1) / self.N)
-                self.verboseprint("\tProp Moved: {:.3f}".format(self.prop_moved[-1]))
+                # ESTIMATE ACCEPTANCE PROBABILITY
+                ap_hat = 1 - (sum(np.all((z_new - z) == zeros(self.d), axis=1)) / self.N)
+
+                # TUNE STEP SIZE
+                z = z_new
+                self.PARTICLES = vstack((self.PARTICLES, z[None, ...]))
+                self.verboseprint("\tApprox AP: {:.8f}".format(ap_hat))
+                self.δ = clip(exp(log(self.δ) + 0.5*(ap_hat - self.ap_target)), self.δmin, self.δmax)
+                self.δs.append(self.δ)
+                self.verboseprint("\tStep-size adapted to: {:.8f}".format(self.δ))
 
                 n += 1
             self.total_time = time() - starting_time
         except ValueError as e:
             print("ValueError was raised: ", e)
-        return z
-
-
-class MultivariateMarkovSnippetsTHUGMetropolised:
-
-    def __init__(self, SETTINGS):
-        """Metropolised version: for each particle compute the endpoint of trajectory and its weight.
-        If the weight is positive, we accept the final point, otherwise we accept the initial point.
-
-        Parameters
-        ----------
-
-        :param N: Number of particles
-        :type N:  int
-
-        :param B: Number of bounces for the THUG integrator. Equivalent to `L` Leapfrog steps in HMC.
-        :type B: int
-
-        :param δ: Step-size used at each bounce, for the THUG integrator.
-        :type δ: float
-
-        :param d: Dimensionality of the `x` component of each particle, and equally dimensionality of
-                  `v` component of each particle. Therefore each particle has dimension `2d`.
-
-        :param ϵs: Tolerances that fully specify the sequence of target filamentary distributions.
-        :type ϵs: iterable
-        """
-        # Input variables
-        self.N  = SETTINGS['N']
-        self.δ  = SETTINGS['δ']
-        self.d  = SETTINGS['d']
-        self.ϵs = SETTINGS['ϵs']
-        self.manifold = SETTINGS['manifold']
-        self.SETTINGS = SETTINGS
-        self.B = SETTINGS['B']
-
-        # Variables derived from the above
-        self.P  = len(self.ϵs) - 1                                       # Number of target distributions
-        self.log_ηs = [self.manifold.generate_logηϵ(ϵ) for ϵ in self.ϵs]     # List of filamentary distributions
-
-    def initialize_particles(self):
-        """Initialize by sampling with RWM on distribution with ϵ0."""
-        # Initialize first position on the manifold
-        x0 = self.SETTINGS['ξ0']
-        # Sample using RWM
-        burn_in = 100
-        thinning = 10
-        ### try initializing using Tangential Hug as MCMC kernel?
-        #TO_BE_THINNED, acceptance = RWM(x0, self.δ, burn_in + thinning*self.N, self.log_ηs[0])
-        q = MVN(zeros(self.d), eye(self.d))
-        TO_BE_THINNED, acceptance = HugTangentialMultivariate(x0, self.B*self.δ, self.B, burn_in + thinning*self.N, 0.0, q, self.log_ηs[0], self.manifold.fullJacobian, method='linear')
-        print("Initializing particles. Acceptance: ", np.mean(acceptance)*100)
-        # Thin the samples to obtain the particles
-        initialized_particles = TO_BE_THINNED[burn_in:][::thinning]
-        # Refresh velocities and form particles
-        v0 = np.random.normal(loc=0.0, scale=1.0, size=(self.N, self.d))
-        z0 = np.hstack((initialized_particles, v0))
-        self.starting_particles = z0
-        return z0
-
-    def sample(self):
-        """Starts the Markov Snippets sampler."""
-        starting_time = time.time()
-        # Initialize particles
-        z = self.initialize_particles()   # (N, 2d)
-        # Storage
-        self.PARTICLES    = zeros((self.P+1, self.N, 2*self.d))
-        self.PARTICLES[0] = z
-        self.WEIGHTS      = zeros((self.P+1, self.N))
-        self.WEIGHTS[0]   = 1 / self.N
-        self.ESS          = zeros(self.P+1)
-        self.ESS[0]       = 1 / np.sum(self.WEIGHTS[0]**2)
-        # For each target distribution, run the following loop
-        for n in range(1, self.P+1):
-            # Standard SMC sampler, we mutate the particles and then we resample
-            ### Mutation step:
-            ###### Refresh velocities
-            z[:, self.d:] = np.random.normal(loc=0.0, scale=1.0, size=(self.N, self.d))
-            ###### Mutate positions
-            M = lambda z: THUG_MH(z, self.B, self.δ, self.log_ηs[n-1])
-            Z = np.apply_along_axis(M, 1, z)
-            ### Compute weights
-            # Notice in this case the weight is different because we are not using the uniform kernel anymore
-            # Importantly: this is now the INCREMENTAL weight and so has to be multiplied by the previous one.
-            w_incremental = exp(np.apply_along_axis(self.log_ηs[n], 1, Z[:, :self.d]) - np.apply_along_axis(self.log_ηs[n-1], 1, Z[:, :self.d]))
-#             w = (abs(np.apply_along_axis(f, 1, Z[:, :p]) - level_set_value) <= self.ϵs[n]).astype(float)
-            w = w_incremental # since we resample, no need to multiply #self.WEIGHTS[n-1] * w_incremental
-            w = w / w.sum()
-            self.WEIGHTS[n] = w
-            self.ESS[n]     = 1 / np.sum(w**2)
-            ### Resample
-            indeces = choice(a=np.arange(self.N), size=self.N, p=w)
-            z = z[indeces, :]
-            self.PARTICLES[n] = z
-        self.total_time = time.time() - starting_time
         return z
 
 
