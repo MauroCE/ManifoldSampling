@@ -1278,7 +1278,14 @@ class MSAdaptiveTolerancesAdaptiveδUni:
             self.ϵs.append(SETTINGS['ϵ0'])
             self.log_ηs.append(FilamentaryDistribution(self.manifold.generate_logηϵ, self.ϵs[0]))
         elif self.initialization == 'init_prior':
-            self.initializer = init_prior
+            def full_initializer():
+                print("Initializing from prior.")
+                x_samples = self.manifold.sample_prior(self.N, seed=self.seed_for_prior_initialization)
+                rng = default_rng(seed=self.seed_for_prior_initialization)
+                v_samples = rng.normal(size=x_samples.shape)
+                z_samples = hstack((x_samples, v_samples))
+                return z_samples
+            self.initializer = full_initializer
             # self.ϵs.append(-np.inf)
             # self.log_ηs.append(FilamentaryDistribution(self.manifold.generate_logprior, -np.inf))
         elif self.initialization == 'init_on_manifold':
@@ -1294,7 +1301,8 @@ class MSAdaptiveTolerancesAdaptiveδUni:
 
     def initialize_particles(self):
         """Initializes based on the user input. 3 options available, see docs."""
-        z0 = self.initializer(self)
+        z0 = self.initializer()
+        self.starting_particles = z0
         return z0
 
     def compute_weights_safely(self, log_μnm1_z, log_μn_ψk_z):
@@ -1478,7 +1486,11 @@ class SMCAdaptiveTolerancesAdaptiveδUni:
             self.ϵs.append(SETTINGS['ϵ0'])
             self.log_ηs.append(FilamentaryDistribution(self.manifold.generate_logηϵ, self.ϵs[0]))
         elif self.initialization == 'init_prior':
-            self.initializer = init_prior
+            def full_initializer():
+                print("Initializing from prior.")
+                x_samples = self.manifold.sample_prior(self.N, seed=self.seed_for_prior_initialization)
+                return x_samples
+            self.initializer = full_initializer
             # self.ϵs.append(-np.inf)
             # self.log_ηs.append(FilamentaryDistribution(self.manifold.generate_logprior, -np.inf))
         elif self.initialization == 'init_on_manifold':
@@ -1494,7 +1506,7 @@ class SMCAdaptiveTolerancesAdaptiveδUni:
 
     def initialize_particles(self):
         """Initializes based on the user input. 3 options available, see docs."""
-        z0 = self.initializer(self)
+        z0 = self.initializer()
         return z0
 
     def sample(self):
