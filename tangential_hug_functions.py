@@ -169,6 +169,8 @@ class TangentialHugSampler:
         return one_step_sampler
 
 
+
+
 def HugTangentialMultivariateSafe(x0, T, B, N, α, q, logpi, jac, method='qr', return_n_grad=False, verbose=False):
     """This version is safe meaning that if during the bounces one of the jacobians runs into a runtime warning,
     we simply reject and try again.

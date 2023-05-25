@@ -52,18 +52,18 @@ class GeneralizedEllipse(Manifold):
         else:
             raise ValueError("Invalid prior specification.")
 
-    def generate_logηϵ(self, ϵ):
+    def generate_logηε(self, ε):
         """Generates the filamentary distribution."""
         if self.kernel == 'uniform':
-            def logηϵ(ξ):
+            def logηε(ξ):
                 with np.errstate(divide='ignore'):
-                    return self.logprior(ξ) + log(float(norm(self.q(ξ)) <= ϵ)) - log(ϵ)
-            return logηϵ
+                    return self.logprior(ξ) + log(float(norm(self.q(ξ)) <= ε)) - log(ε)
+            return logηε
         elif self.kernel == 'normal':
-            def logηϵ(ξ):
+            def logηε(ξ):
                 u = self.q(ξ)
-                return self.logprior(ξ) - (norm(u)**2)/(2*ϵ**2) - log(ϵ) - log(2*np.pi)/2
-            return logηϵ
+                return self.logprior(ξ) - (norm(u)**2)/(2*ε**2) - log(ε) - log(2*np.pi)/2
+            return logηε
 
     def q(self, xyz):
         """Constraint function for the contour of MVN"""
