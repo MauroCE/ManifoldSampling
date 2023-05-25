@@ -6,7 +6,7 @@ from numpy import r_, exp, log, vstack, eye, prod, zeros, isfinite, ones, diag, 
 from numpy.linalg import norm
 from numpy.random import default_rng, randn
 from scipy.optimize import fsolve
-from scipy.special import ndtri, ndtr
+from scipy.special import ndtri, ndtr, logsumexp
 from scipy.linalg import block_diag
 from scipy.stats import uniform as udist
 from scipy.stats import norm as ndist

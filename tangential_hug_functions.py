@@ -1,6 +1,7 @@
 from pyparsing import alphanums
 from Manifolds.GeneralizedEllipse import GeneralizedEllipse
 import numpy as np
+from numpy import zeros, eye
 from numpy.lib.twodim_base import eye
 from numpy.linalg import norm, solve, cholesky, det
 from scipy.linalg import solve_triangular, qr, lstsq
@@ -13,10 +14,164 @@ from numpy.random import uniform
 from warnings import catch_warnings, filterwarnings
 # numpy version 1.19.5 worked
 
+class TangentialHugSampler:
+
+    def __init__(self, x0, T, B, N, α, logpi, jac, method='qr', safe=True):
+        """This class works for both univariate and multivariate problems."""
+        # Check Arguments
+        assert isinstance(x0, np.ndarray), "Initial point must be a numpy array."
+        assert isinstance(T, float), "Total integration time must be float."
+        assert isinstance(B, int), "Number of bounces must be an integer."
+        assert isinstance(N, int), "Number of samples must be an integer."
+        assert isinstance(α, float), "Squeezing parameter must be float."
+        assert (α >= 0) and (α < 1), "α must be in [0, 1)."
+        assert isinstance(method, str), "method must be a string."
+        assert method in ['qr', 'linear', 'lstsq'], "method must be one of 'qr', 'linear', or 'lstsq'."
+        assert len(x0) >= 2, "x0 must be at least 2-dimensional."
+        assert isinstance(verbose, bool), "verbose must be a bool."
+        assert isinstance(safe, bool), "safe must be a bool."
+
+        # Store arguments
+        self.x0    = x0
+        self.T     = T
+        self.B     = B
+        self.N     = N
+        self.α     = α
+        self.logpi = logpi
+        self.jac   = jac
+        self.method = method
+        self.safe   = safe
+        self.δ      = self.T / self.B
+
+        # Create proposal distribution
+        self.d = len(x0)
+        self.q = multivariate_normal(zeros(self.d), eye(self.d))
+
+        # Check that pi(x0) is not 0
+        if abs(self.logpi(self.x0)) == np.inf:
+            raise ValueError("While testing logpi, noticed that logpi(x0) is not finite.")
+
+        # Decide whether to use a safe jacobian function or not
+        def safe_jac(x):
+            """Raises an error when a RuntimeWarning appears."""
+            while catch_warnings():
+                filterwarnings('error')
+                try:
+                    return self.jac(x)
+                except RuntimeWarning:
+                    raise ValueError("Jacobian computation failed due to Runtime Warning.")
+        if self.safe:
+            self.jacobian = safe_jac
+        else:
+            self.jacobian = self.jac
+
+        # Figure out if we are working with Jacobians or Gradients
+        derivative = self.jacobian(x0)
+        if (len(derivative.shape) == 1) and len(derivative) == self.d: # Univariate
+            self.project = self._univariate_project
+        elif (len(derivative.shape) == 2) and derivative.shape[0] == self.d: # Multivariate
+            if self.method == 'qr':
+                self.project = self._qr_project
+            elif self.method == 'linear':
+                self.project = self._linear_project
+            else:
+                self.project = self._lstsq_project
+        else:
+            raise ValueError("Something's wrong with the derivative. It has shape: ", derivative.shape)
+
+    def _univariate_project(self, v, g):
+        """Projection function for problems using a gradient, not a Jacobian."""
+        ghat = g / norm(g) # Normalize gradient
+        return (v @ ghat) * ghat # Return projection
+
+    def _qr_project(self, v, J):
+        """Projects using QR decomposition. Must be used in Jacobian problems."""
+        Q, _ = qr(J.T, mode='economic')
+        return Q.dot((Q.T.dot(v)))
+
+    def _linear_project(self, v, J):
+        """Projects by solving linear system."""
+        return J.T.dot(solve(J.dot(J.T), J.dot(v)))
+
+    def _lstsq_project(self, v, J):
+        """Projects using scipy's Least Squares routine."""
+        return J.T.dot(lstsq(J.T, v)[0])
+
+    def sample(self):
+        """Samples using Tangential Hug."""
+        samples, acceptances = self.x0, zeros(self.N)
+        x0 = self.x0
+        logu = np.log(rand(self.N))
+        for i in range(self.N):
+            v0s = self.q.rvs()
+            z   = sefl.integrator(np.concatenate((x0, v0s)))
+            x, v = z[:self.d], z[self.d:]
+            if logu[i] <= self.logpi(x) + self.q.logpdf(v) - self.logpi(x0) - self.q.logpdf(v0s):
+                samples = np.vstack((samples, x))
+                acceptances[i] = 1         # Accepted!
+                x0 = x
+            else:
+                samples = np.vstack((samples, x0))
+                acceptances[i] = 0         # Rejected
+        # store
+        self.samples = samples
+        self.acceptances = acceptances
+        return samples[1:], acceptances
+
+    def integrator(self, z0):
+        """Deterministic integrator for fixed α, δ, and B."""
+        x0, v0s = z0[:self.d], z0[self.d:]
+        v0 = v0s - self.α * self.project(v0s, self.jacobian(x0))
+        v, x = v0, x0
+        for _ in range(self.B):
+            x = x + self.δ*v/2
+            v = v - 2 * self.project(v, self.jacobian(x))
+            x = x + self.δ*v/2
+        # Unsqueeze
+        v = v + (self.α / (1 - self.α)) * self.project(v, self.jacobian(x))
+        return np.concatenate((x, v))
+
+    def generate_integrator(self, B, δ, α=0.0):
+        """Generates an integrator function ψ. This works well for Markov Snippets."""
+        def ψ(z0):
+            x0, v0s = z0[:self.d], z0[self.d:]
+            v0 = v0s - α * self.project(v0s, self.jacobian(x0))
+            v, x = v0, x0
+            for _ in range(B):
+                x = x + δ*v/2
+                v = v - 2 * self.project(v, self.jacobian(x))
+                x = x + δ*v/2
+            # Unsqueeze
+            v = v + (α / (1 - α)) * self.project(v, self.jacobian(x))
+            return np.concatenate((x, v))
+        return ψ
+
+    def generate_sampler(self, B, δ, logpi, α=0.0):
+        """Generates a function that gets one THUG sample. Works well for SMC samplers."""
+        def one_step_sampler(x0):
+            v0s = self.q.rvs()
+            logu = np.log(rand())
+            # Squeeze
+            v0 = v0s - α * self.project(v0s, self.jacobian(x0))
+            v, x = v0, x0
+            # Integrate
+            for _ in range(B):
+                x = x + δ*v/2
+                v = v - 2 * self.project(v, self.jacobian(x))
+                x = x + δ*v/2
+            # Unsqueeze
+            v = v + (α / (1 - α)) * self.project(v, self.jacobian(x))
+            # Metropolis-Hastings
+            if logu <= logpi(x) + self.q.logpdf(v) - logpi(x0) - self.q.logpdf(v0s):
+                return x
+            else:
+                return x0
+        return one_step_sampler
+
 
 def HugTangentialMultivariateSafe(x0, T, B, N, α, q, logpi, jac, method='qr', return_n_grad=False, verbose=False):
     """This version is safe meaning that if during the bounces one of the jacobians runs into a runtime warning,
-    we simply reject and try again. 
+    we simply reject and try again.
     - 'qr': projects onto row space of Jacobian using QR decomposition.
     - 'linear': solves a linear system to project.
     """
@@ -48,7 +203,7 @@ def HugTangentialMultivariateSafe(x0, T, B, N, α, q, logpi, jac, method='qr', r
     #         except RuntimeWarning:
     #             raise ValueError("Jacobian computation failed due to Runtime Warning.")
     samples, acceptances = x0, np.zeros(N)
-    # Compute initial Jacobian. 
+    # Compute initial Jacobian.
     n_grad_computations = 0
     for i in range(N):
         v0s = q.rvs()
@@ -82,17 +237,13 @@ def HugTangentialMultivariateSafe(x0, T, B, N, α, q, logpi, jac, method='qr', r
                 acceptances[i] = 0
     if return_n_grad:
         return samples[1:], acceptances, n_grad_computations
-    else: 
+    else:
         return samples[1:], acceptances
-
-
-
-
 
 
 def HugTangential(x0, T, B, N, alpha, q, logpi, grad_log_pi):
     """
-    Tangential Hug. Notice that it doesn't matter whether we use the gradient of pi or 
+    Tangential Hug. Notice that it doesn't matter whether we use the gradient of pi or
     grad log pi to tilt the velocity.
     """
     # Grab dimension, initialize storage for samples & acceptances
@@ -109,7 +260,7 @@ def HugTangential(x0, T, B, N, alpha, q, logpi, grad_log_pi):
         for _ in range(B):
             x = x + delta*v/2           # Move to midpoint
             g = grad_log_pi(x)          # Compute gradient at midpoint
-            ghat = g / norm(g)          # Normalize 
+            ghat = g / norm(g)          # Normalize
             v = v - 2*(v @ ghat) * ghat # Reflect velocity using midpoint gradient
             x = x + delta*v/2           # Move from midpoint to end-point
         # Unsqueeze the velocity
@@ -159,7 +310,7 @@ def HugTangentialMultivariate(x0, T, B, N, α, q, logpi, jac, method='qr', retur
             except RuntimeWarning:
                 raise ValueError("Jacobian computation failed due to Runtime Warning.")
     samples, acceptances = x0, np.zeros(N)
-    # Compute initial Jacobian. 
+    # Compute initial Jacobian.
     n_grad_computations = 0
     for i in range(N):
         v0s = q.rvs()
@@ -186,13 +337,13 @@ def HugTangentialMultivariate(x0, T, B, N, α, q, logpi, jac, method='qr', retur
             acceptances[i] = 0         # Rejected
     if return_n_grad:
         return samples[1:], acceptances, n_grad_computations
-    else: 
+    else:
         return samples[1:], acceptances
 
 
 def HugTangentialCached(x0, T, B, N, alpha, q, logpi, grad_log_pi):
     """
-    Tangential Hug. Notice that it doesn't matter whether we use the gradient of pi or 
+    Tangential Hug. Notice that it doesn't matter whether we use the gradient of pi or
     grad log pi to tilt the velocity.
     """
     # Grab dimension, initialize storage for samples & acceptances
@@ -257,7 +408,7 @@ def HugTangential_EJSD(x0, T, B, N, alpha, q, logpi, grad_log_pi):
         for _ in range(B):
             x = x + delta*v/2           # Move to midpoint
             g = grad_log_pi(x)          # Compute gradient at midpoint
-            ghat = g / norm(g)          # Normalize 
+            ghat = g / norm(g)          # Normalize
             v = v - 2*(v @ ghat) * ghat # Reflect velocity using midpoint gradient
             x = x + delta*v/2           # Move from midpoint to end-point
         # Unsqueeze the velocity
@@ -283,7 +434,7 @@ def HugTangentialAR(x0, T, B, N, alpha, prob, q, logpi, grad_log_pi):
     """
     Non-reversible Tangential Hug. At every iteration we sample a variable
     w ~ U(0, 1) and with probability prob = 0.75 we use an AR process with \rho=1
-    (i.e. we keep exactly the previous velocity). Otherwise we use an AR process 
+    (i.e. we keep exactly the previous velocity). Otherwise we use an AR process
     with \rho=0 (i.e. we completely refresh the velocity). The AR process is
             V_{t+1} = \rho V_t + \sqrt{1 - \rho^2} W_t
     where V_t is the previous velocity, W_t ~ N(0, 1) and |\rho| <= 1.
@@ -295,7 +446,7 @@ def HugTangentialAR(x0, T, B, N, alpha, prob, q, logpi, grad_log_pi):
     v0s = q.rvs()
     for i in range(N):
         # With probability prob keep the same velocity, otherwise refresh completely
-        if uniform() > prob: 
+        if uniform() > prob:
             v0s = q.rvs()
         g = grad_log_pi(x0)              # Compute gradient at x0
         g = g / norm(g)                  # Normalize
@@ -307,7 +458,7 @@ def HugTangentialAR(x0, T, B, N, alpha, prob, q, logpi, grad_log_pi):
         for _ in range(B):
             x = x + delta*v/2           # Move to midpoint
             g = grad_log_pi(x)          # Compute gradient at midpoint
-            ghat = g / norm(g)          # Normalize 
+            ghat = g / norm(g)          # Normalize
             v = v - 2*(v @ ghat) * ghat # Reflect velocity using midpoint gradient
             x = x + delta*v/2           # Move from midpoint to end-point
         # Unsqueeze the velocity
@@ -341,7 +492,7 @@ def HugTangentialAR_EJSD(x0, T, B, N, alpha, prob, q, logpi, grad_log_pi):
     v0s = q.rvs()
     for i in range(N):
         # With probability prob keep the same velocity, otherwise refresh completely
-        if uniform() > prob: 
+        if uniform() > prob:
             v0s = q.rvs()
         g0 = grad_log_pi(x0)              # Compute gradient at x0
         g0 = g0 / norm(g0)                  # Normalize
@@ -353,7 +504,7 @@ def HugTangentialAR_EJSD(x0, T, B, N, alpha, prob, q, logpi, grad_log_pi):
         for _ in range(B):
             x = x + delta*v/2           # Move to midpoint
             g = grad_log_pi(x)          # Compute gradient at midpoint
-            ghat = g / norm(g)          # Normalize 
+            ghat = g / norm(g)          # Normalize
             v = v - 2*(v @ ghat) * ghat # Reflect velocity using midpoint gradient
             x = x + delta*v/2           # Move from midpoint to end-point
         # Unsqueeze the velocity
@@ -363,7 +514,7 @@ def HugTangentialAR_EJSD(x0, T, B, N, alpha, prob, q, logpi, grad_log_pi):
         # Acceptance probability
         loga = logpi(x) + q.logpdf(vs) - logpi(x0) - q.logpdf(v0s)
         a = min(1.0, np.exp(loga))
-        ejsd[i] = a * norm(x0 - x)**2 
+        ejsd[i] = a * norm(x0 - x)**2
         # In the acceptance ratio must use spherical velocities!! Hence v0s and the unsqueezed v
         if logu <= loga:
             samples = np.vstack((samples, x))
@@ -402,7 +553,7 @@ def HugTangentialARrho(x0, T, B, N, alpha, rho, q, logpi, grad_log_pi):
         for _ in range(B):
             x = x + delta*v/2           # Move to midpoint
             g = grad_log_pi(x)          # Compute gradient at midpoint
-            ghat = g / norm(g)          # Normalize 
+            ghat = g / norm(g)          # Normalize
             v = v - 2*(v @ ghat) * ghat # Reflect velocity using midpoint gradient
             x = x + delta*v/2           # Move from midpoint to end-point
         # Unsqueeze the velocity
@@ -449,7 +600,7 @@ def HugTangentialARrho_EJSD(x0, T, B, N, alpha, rho, q, logpi, grad_log_pi):
         for _ in range(B):
             x = x + delta*v/2           # Move to midpoint
             g = grad_log_pi(x)          # Compute gradient at midpoint
-            ghat = g / norm(g)          # Normalize 
+            ghat = g / norm(g)          # Normalize
             v = v - 2*(v @ ghat) * ghat # Reflect velocity using midpoint gradient
             x = x + delta*v/2           # Move from midpoint to end-point
         # Unsqueeze the velocity
@@ -491,7 +642,7 @@ def compare_HUG_THUG_THUGAR(x00, T, B, N, alpha, prob, q, logpi, grad_log_pi):
 
         for _ in range(B):
             # Move
-            x = x + delta*v/2 
+            x = x + delta*v/2
             # Reflect
             g = grad_log_pi(x)
             ghat = g / norm(g)
@@ -520,7 +671,7 @@ def compare_HUG_THUG_THUGAR(x00, T, B, N, alpha, prob, q, logpi, grad_log_pi):
         for _ in range(B):
             x = x + delta*v/2           # Move to midpoint
             g = grad_log_pi(x)          # Compute gradient at midpoint
-            ghat = g / norm(g)          # Normalize 
+            ghat = g / norm(g)          # Normalize
             v = v - 2*(v @ ghat) * ghat # Reflect velocity using midpoint gradient
             x = x + delta*v/2           # Move from midpoint to end-point
         # Unsqueeze the velocity
@@ -540,7 +691,7 @@ def compare_HUG_THUG_THUGAR(x00, T, B, N, alpha, prob, q, logpi, grad_log_pi):
     thug_ar, athug_ar = x0, np.zeros(N)
     for i in range(N):
         # With probability prob keep the same velocity, otherwise refresh completely
-        if uniform() > prob or i==0: 
+        if uniform() > prob or i==0:
             v0s = velocities[i]
         g = grad_log_pi(x0)              # Compute gradient at x0
         g = g / norm(g)                  # Normalize
@@ -551,7 +702,7 @@ def compare_HUG_THUG_THUGAR(x00, T, B, N, alpha, prob, q, logpi, grad_log_pi):
         for _ in range(B):
             x = x + delta*v/2           # Move to midpoint
             g = grad_log_pi(x)          # Compute gradient at midpoint
-            ghat = g / norm(g)          # Normalize 
+            ghat = g / norm(g)          # Normalize
             v = v - 2*(v @ ghat) * ghat # Reflect velocity using midpoint gradient
             x = x + delta*v/2           # Move from midpoint to end-point
         # Unsqueeze the velocity
@@ -590,7 +741,7 @@ def compare_HUG_THUG_THUGAR_rho(x00, T, B, N, alpha, rho, q, logpi, grad_log_pi)
 
         for _ in range(B):
             # Move
-            x = x + delta*v/2 
+            x = x + delta*v/2
             # Reflect
             g = grad_log_pi(x)
             ghat = g / norm(g)
@@ -619,7 +770,7 @@ def compare_HUG_THUG_THUGAR_rho(x00, T, B, N, alpha, rho, q, logpi, grad_log_pi)
         for _ in range(B):
             x = x + delta*v/2           # Move to midpoint
             g = grad_log_pi(x)          # Compute gradient at midpoint
-            ghat = g / norm(g)          # Normalize 
+            ghat = g / norm(g)          # Normalize
             v = v - 2*(v @ ghat) * ghat # Reflect velocity using midpoint gradient
             x = x + delta*v/2           # Move from midpoint to end-point
         # Unsqueeze the velocity
@@ -652,7 +803,7 @@ def compare_HUG_THUG_THUGAR_rho(x00, T, B, N, alpha, rho, q, logpi, grad_log_pi)
         for _ in range(B):
             x = x + delta*v/2           # Move to midpoint
             g = grad_log_pi(x)          # Compute gradient at midpoint
-            ghat = g / norm(g)          # Normalize 
+            ghat = g / norm(g)          # Normalize
             v = v - 2*(v @ ghat) * ghat # Reflect velocity using midpoint gradient
             x = x + delta*v/2           # Move from midpoint to end-point
         # Unsqueeze the velocity
@@ -677,7 +828,7 @@ def compare_HUG_THUG_THUGAR_rho(x00, T, B, N, alpha, rho, q, logpi, grad_log_pi)
 
 def HugTangentialPC(x0, T, B, S, N, alpha, q, logpi, grad_log_pi):
     """
-    Spherical Hug. Notice that it doesn't matter whether we use the gradient of pi or 
+    Spherical Hug. Notice that it doesn't matter whether we use the gradient of pi or
     grad log pi to tilt the velocity.
     """
     # Grab dimension, initialize storage for samples & acceptances
@@ -754,7 +905,7 @@ def Hug(x0, T, B, N, q, logpi, grad_log_pi):
 
         for _ in range(B):
             # Move
-            x = x + delta*v/2 
+            x = x + delta*v/2
             # Reflect
             g = grad_log_pi(x)
             ghat = g / norm(g)
@@ -792,7 +943,7 @@ def HugCached(x0, T, B, N, q, logpi, grad_log_pi):
 
         for _ in range(B):
             # Move
-            x = x + delta*v/2 
+            x = x + delta*v/2
             # Reflect
             g = grad_log_pi(x)
             n_gradients += 1
@@ -832,7 +983,7 @@ def Hug_EJSD(x0, T, B, N, q, logpi, grad_log_pi):
 
         for _ in range(B):
             # Move
-            x = x + delta*v/2 
+            x = x + delta*v/2
             # Reflect
             g = grad_log_pi(x)
             ghat = g / norm(g)
@@ -870,7 +1021,7 @@ def HugAR(x0, T, B, N, prob, q, logpi, grad_log_pi):
 
         for _ in range(B):
             # Move
-            x = x + delta*v/2 
+            x = x + delta*v/2
             # Reflect
             g = grad_log_pi(x)
             ghat = g / norm(g)
@@ -908,7 +1059,7 @@ def HugARrho(x0, T, B, N, rho, q, logpi, grad_log_pi):
 
         for _ in range(B):
             # Move
-            x = x + delta*v/2 
+            x = x + delta*v/2
             # Reflect
             g = grad_log_pi(x)
             ghat = g / norm(g)
@@ -932,7 +1083,7 @@ def HugARrho(x0, T, B, N, rho, q, logpi, grad_log_pi):
 def HugAR_EJSD(x0, T, B, N, prob, q, logpi, grad_log_pi):
     """
     Same as HugAR but also outputs EJSD. Notice it outputs the averaged (i.e. Expected)
-    JSD already. Again, this should be used on its own, not with Hop. 
+    JSD already. Again, this should be used on its own, not with Hop.
     """
     samples, acceptances = x0, np.zeros(N)
     ejsd = np.zeros(N)
@@ -949,7 +1100,7 @@ def HugAR_EJSD(x0, T, B, N, prob, q, logpi, grad_log_pi):
 
         for _ in range(B):
             # Move
-            x = x + delta*v/2 
+            x = x + delta*v/2
             # Reflect
             g = grad_log_pi(x)
             ghat = g / norm(g)
@@ -976,7 +1127,7 @@ def HugAR_EJSD(x0, T, B, N, prob, q, logpi, grad_log_pi):
 def HugARrho_EJSD(x0, T, B, N, rho, q, logpi, grad_log_pi):
     """
     Similar to HugAR_EJDS but uses the full AR process. Notice it outputs the averaged (i.e. Expected)
-    JSD already. Again, this should be used on its own, not with Hop. 
+    JSD already. Again, this should be used on its own, not with Hop.
     """
     assert abs(rho) <= 1, "Rho must satisfy |rho| <= 1."
     samples, acceptances = x0, np.zeros(N)
@@ -993,7 +1144,7 @@ def HugARrho_EJSD(x0, T, B, N, rho, q, logpi, grad_log_pi):
 
         for _ in range(B):
             # Move
-            x = x + delta*v/2 
+            x = x + delta*v/2
             # Reflect
             g = grad_log_pi(x)
             ghat = g / norm(g)
@@ -1032,7 +1183,7 @@ def HugStepEJSD(x0, T, B, q, logpi, grad_log_pi):
 
     for _ in range(B):
         # Move
-        x = x + delta*v/2 
+        x = x + delta*v/2
         # Reflect
         g = grad_log_pi(x)
         ghat = g / norm(g)
@@ -1072,7 +1223,7 @@ def HugStepEJSD_Deterministic(x0, v0, logu, T, B, q, logpi, grad_log_pi):
 
     for _ in range(B):
         # Move
-        x = x + delta*v/2 
+        x = x + delta*v/2
         # Reflect
         g = grad_log_pi(x)
         ghat = g / norm(g)
@@ -1111,7 +1262,7 @@ def HugStepEJSD_DeterministicAR(x0, v0, logu, T, B, q, logpi, grad_log_pi):
 
     for _ in range(B):
         # Move
-        x = x + delta*v/2 
+        x = x + delta*v/2
         # Reflect
         g = grad_log_pi(x)
         ghat = g / norm(g)
@@ -1153,7 +1304,7 @@ def HugARStepEJSD(x0, v0, T, B, q, logpi, grad_log_pi):
 
     for _ in range(B):
         # Move
-        x = x + delta*v/2 
+        x = x + delta*v/2
         # Reflect
         g = grad_log_pi(x)
         ghat = g / norm(g)
@@ -1198,7 +1349,7 @@ def HugTangentialStepEJSD_AR(x0, v0s, T, B, alpha, q, logpi, grad_log_pi):
     for _ in range(B):
         x = x + delta*v/2           # Move to midpoint
         g = grad_log_pi(x)          # Compute gradient at midpoint
-        ghat = g / norm(g)          # Normalize 
+        ghat = g / norm(g)          # Normalize
         v = v - 2*(v @ ghat) * ghat # Reflect velocity using midpoint gradient
         x = x + delta*v/2           # Move from midpoint to end-point
     # Unsqueeze the velocity
@@ -1235,7 +1386,7 @@ def HugTangentialStepEJSD_AR_Deterministic(x0, v0s, logu, T, B, alpha, q, logpi,
     for _ in range(B):
         x = x + delta*v/2           # Move to midpoint
         g = grad_log_pi(x)          # Compute gradient at midpoint
-        ghat = g / norm(g)          # Normalize 
+        ghat = g / norm(g)          # Normalize
         v = v - 2*(v @ ghat) * ghat # Reflect velocity using midpoint gradient
         x = x + delta*v/2           # Move from midpoint to end-point
     # Unsqueeze the velocity
@@ -1273,7 +1424,7 @@ def HugTangentialStepEJSD(x0, T, B, alpha, q, logpi, grad_log_pi):
     for _ in range(B):
         x = x + delta*v/2           # Move to midpoint
         g = grad_log_pi(x)          # Compute gradient at midpoint
-        ghat = g / norm(g)          # Normalize 
+        ghat = g / norm(g)          # Normalize
         v = v - 2*(v @ ghat) * ghat # Reflect velocity using midpoint gradient
         x = x + delta*v/2           # Move from midpoint to end-point
     # Unsqueeze the velocity
@@ -1311,7 +1462,7 @@ def HugTangentialStepEJSD_Deterministic(x0, v0s, logu, T, B, alpha, q, logpi, gr
     for _ in range(B):
         x = x + delta*v/2           # Move to midpoint
         g = grad_log_pi(x)          # Compute gradient at midpoint
-        ghat = g / norm(g)          # Normalize 
+        ghat = g / norm(g)          # Normalize
         v = v - 2*(v @ ghat) * ghat # Reflect velocity using midpoint gradient
         x = x + delta*v/2           # Move from midpoint to end-point
     # Unsqueeze the velocity
@@ -1349,7 +1500,7 @@ def HugTangentialStepEJSD_Deterministic_Delta(x0, v0s, logu, T, B, alpha, q, log
     for _ in range(B):
         x = x + delta*v/2           # Move to midpoint
         g = grad_log_pi(x)          # Compute gradient at midpoint
-        ghat = g / norm(g)          # Normalize 
+        ghat = g / norm(g)          # Normalize
         v = v - 2*(v @ ghat) * ghat # Reflect velocity using midpoint gradient
         x = x + delta*v/2           # Move from midpoint to end-point
     # Unsqueeze the velocity
@@ -1377,7 +1528,7 @@ def HugTangentialStepEJSD_Deterministic_Delta(x0, v0s, logu, T, B, alpha, q, log
 def HugPC(x0, T, B, S, N, q, logpi, grad_log_pi):
     """
     Preconditioned Hug Kernel. S is a function that takes a position x and returns
-    sample covariance matrix of dimension d. 
+    sample covariance matrix of dimension d.
     """
     samples, acceptances = x0, np.zeros(N)
     for i in range(N):
@@ -1392,7 +1543,7 @@ def HugPC(x0, T, B, S, N, q, logpi, grad_log_pi):
 
         for _ in range(B):
             # Move
-            x = x + delta*v/2 
+            x = x + delta*v/2
             # Reflect
             g = grad_log_pi(x)
             Sg = S(x) @ g
@@ -1424,7 +1575,7 @@ def NoAR(x00, T, B, N, alphas, q_sample, grad_log_pi):
     for i in range(N):
         # Draw velocity
         v0 = v_sphericals[i]
-        
+
         # Housekeeping
         v = v0
         x = x0
@@ -1433,7 +1584,7 @@ def NoAR(x00, T, B, N, alphas, q_sample, grad_log_pi):
 
         for _ in range(B):
             # Move
-            x = x + delta*v/2 
+            x = x + delta*v/2
             # Reflect
             g = grad_log_pi(x)
             ghat = g / norm(g)
@@ -1461,7 +1612,7 @@ def NoAR(x00, T, B, N, alphas, q_sample, grad_log_pi):
 
             for _ in range(B):
                 # Move
-                x = x + delta*v/2 
+                x = x + delta*v/2
                 # Reflect
                 g = grad_log_pi(x)
                 ghat = g / norm(g)
@@ -1482,7 +1633,7 @@ def HugAcceleration(x0, T, B, N, q_sample, logq, logpi, grad_log_pi, Sigma):
     for i in range(N):
         # Draw velocity
         v0 = q_sample()
-        
+
         # Housekeeping
         v = v0
         x = x0
@@ -1495,7 +1646,7 @@ def HugAcceleration(x0, T, B, N, q_sample, logq, logpi, grad_log_pi, Sigma):
             # Move
             logpi1 = logpi(x)
             g = grad_log_pi(x)
-            x = x + delta*v/2 
+            x = x + delta*v/2
             # Approx Hessian
             g_new = grad_log_pi(x)
             g_new_hat = g_new / norm(g_new)
@@ -1535,7 +1686,7 @@ def Hop(x, lam, k, logpi, grad_log_pi):
     gy = grad_log_pi(y)
     ngy = norm(gy)
     # Acceptance probability
-    logr = logpi(y) - logpi(x) 
+    logr = logpi(y) - logpi(x)
     logr += d * (np.log(ngy) - np.log(ngx))
     logr -= (norm(y - x)**2) * (ngy**2 - ngx**2) / (2*mu_sq)
     logr -= 0.5 * (((y - x) @ gy)**2 - ((y - x) @ gx)**2) * ((1 / lam_sq) - (1 / mu_sq))
@@ -1568,7 +1719,7 @@ def Hop_Deterministic(x, u, log_uniform, lam, k, logpi, grad_log_pi):
     gy = grad_log_pi(y)
     ngy = norm(gy)
     # Acceptance probability
-    logr = logpi(y) - logpi(x) 
+    logr = logpi(y) - logpi(x)
     logr += d * (np.log(ngy) - np.log(ngx))
     logr -= (norm(y - x)**2) * (ngy**2 - ngx**2) / (2*mu_sq)
     logr -= 0.5 * (((y - x) @ gy)**2 - ((y - x) @ gx)**2) * ((1 / lam_sq) - (1 / mu_sq))
@@ -1585,7 +1736,7 @@ def Hop_Deterministic(x, u, log_uniform, lam, k, logpi, grad_log_pi):
 
 def HopPC(x, S, lam, k, logpi, grad_log_pi):
     """
-    Preconditioned Hop Kernel. One single iteration. 
+    Preconditioned Hop Kernel. One single iteration.
     Needs a function S that returns a local coviariance matrix. Will actually end up using
     its cholesky decomposition. See https://math.stackexchange.com/q/4204891/318854.
     """
@@ -1621,12 +1772,12 @@ def HopPC(x, S, lam, k, logpi, grad_log_pi):
     Agy = Ay @ gy
     nAgy = norm(Agy)
     # Compute hessians times gradients
-    # Notice we can solve using Cholesky decomposition. 
+    # Notice we can solve using Cholesky decomposition.
     ymx = y - x
     Hy_ymx = Hess(Ay, ymx)
     Hx_ymx = Hess(Ax, ymx)
     # Acceptance probability
-    logr = logpi(y) - logpi(x) 
+    logr = logpi(y) - logpi(x)
     logr += d * (np.log(nAgy) - np.log(nAgx))
     logr += 0.5 * (np.log(det(Ax)) - np.log(det(Ay)))
     logr -= ymx @ ((nAgx**2) * Hx_ymx - (nAgy**2) * Hy_ymx) / (2 * mu_sq)
@@ -1657,7 +1808,7 @@ def GradientHug(x0, T, B, q, logpi, grad_log_pi):
     delta = T/B
     for _ in range(B):
         # Move
-        x = x + delta* v/2 
+        x = x + delta* v/2
         # Reflect using negated velocity
         g = grad_log_pi(x)
         ghat = g / norm(g)
@@ -1673,7 +1824,7 @@ def GradientHug(x0, T, B, q, logpi, grad_log_pi):
 
 def GradientHugPC(x0, T, B, S, q, logpi, grad_log_pi):
     """
-    Preconditioned Gradient Hug. Notice we might need to do a different preconditioning 
+    Preconditioned Gradient Hug. Notice we might need to do a different preconditioning
     than for Hug. For now, we are using the same.
     """
     v0 = q.rvs()
@@ -1682,7 +1833,7 @@ def GradientHugPC(x0, T, B, S, q, logpi, grad_log_pi):
     delta = T/B
     for _ in range(B):
         # Move
-        x = x + delta* v/2 
+        x = x + delta* v/2
         # Reflect using negated velocity
         g = grad_log_pi(x)
         Sg = S(x) @ g
@@ -1863,7 +2014,7 @@ def HugRotated(x0, T, B, N, alpha, q, logpi, grad_log_pi):
         for _ in range(B):
             x = x + delta*v/2           # Move to midpoint
             g = grad_log_pi(x)          # Compute gradient at midpoint
-            ghat = g / norm(g)          # Normalize 
+            ghat = g / norm(g)          # Normalize
             v = v - 2*(v @ ghat) * ghat # Reflect velocity using midpoint gradient
             x = x + delta*v/2           # Move from midpoint to end-point
         # Unsqueeze the velocity
@@ -1898,7 +2049,7 @@ def HugRotatedStepEJSD_Deterministic(x0, v0s, logu, T, B, alpha, q, logpi, grad_
     for _ in range(B):
         x = x + delta*v/2           # Move to midpoint
         g = grad_log_pi(x)          # Compute gradient at midpoint
-        ghat = g / norm(g)          # Normalize 
+        ghat = g / norm(g)          # Normalize
         v = v - 2*(v @ ghat) * ghat # Reflect velocity using midpoint gradient
         x = x + delta*v/2           # Move from midpoint to end-point
     # Unsqueeze the velocity
@@ -1937,7 +2088,7 @@ def HugRotatedStepEJSD_AR_Deterministic(x0, v0s, logu, T, B, alpha, q, logpi, gr
     for _ in range(B):
         x = x + delta*v/2           # Move to midpoint
         g = grad_log_pi(x)          # Compute gradient at midpoint
-        ghat = g / norm(g)          # Normalize 
+        ghat = g / norm(g)          # Normalize
         v = v - 2*(v @ ghat) * ghat # Reflect velocity using midpoint gradient
         x = x + delta*v/2           # Move from midpoint to end-point
     # Unsqueeze the velocity
