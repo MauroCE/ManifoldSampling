@@ -132,7 +132,7 @@ class MSAdaptive:
             self.verboseprint("Integrator: THUG.")
             # Instantiate the class, doesn't matter which ξ0 or logpi we use.
             THUGSampler = TangentialHugSampler(self.manifold.sample(advanced=True), self.B*self.δ, self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method='linear', safe=True)
-            self.ψ_generator = THUGsampler.generate_integrator # again, this takes B, δ and returns an integrator (notice logpi doesn't matter)
+            self.ψ_generator = THUGsampler.generate_hug_integrator # again, this takes B, δ and returns an integrator (notice logpi doesn't matter)
             self.ψ = self.ψ_generator(self.B, self.δ)
         else:
             raise ValueError("Unexpected value found for integrator.")
@@ -224,10 +224,9 @@ class MSAdaptive:
         """Switches from RWM to THUG."""
         # the next 3 lines are taken verbatim from __init__ when integrator = 'THUG'
         x0 = self.manifold.sample(advanced=True)
-        self.verboseprint("logprior(x0): ", self.manifold.logprior(x0))
         self.sampled_x0 = x0
         THUGSampler = TangentialHugSampler(x0, self.B*self.δ, self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method='linear', safe=True)
-        self.ψ_generator = THUGSampler.generate_integrator # again, this takes B, δ and returns an integrator (notice logpi doesn't matter)
+        self.ψ_generator = THUGSampler.generate_hug_integrator # again, this takes B, δ and returns an integrator (notice logpi doesn't matter)
         self.ψ = self.ψ_generator(self.B, self.δ)
         # Store when the switch happend
         self.n_switch = self.n  # store when the switch happens
@@ -496,7 +495,7 @@ class SMCAdaptive:
             self.εs.append(ε)
             self.log_ηs.append(FilamentaryDistribution(self.manifold.generate_logηε, ε))
 
-    def _compute_weights(self):
+    def _compute_weights(self, z):
         """Computes weights for SMC sampler using log-sum-exp trick."""
         logw = apply_along_axis(lambda z: self.log_ηs[self.n](z) - self.log_ηs[self.n-1](z), 1, z)
         W = exp(logw - logsumexp(logw))
@@ -528,7 +527,7 @@ class SMCAdaptive:
         # in the class initialization T, B, N, α, and logpi don't matter. Only thing that
         # matters is 'safe', 'fullJacobian', and 'method'.
         THUGSampler = TangentialHugSampler(self.manifold.sample(advanced=True), self.B*self.δ, self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method='linear', safe=True)
-        self.MH_kernel = self.THUGSampler.mh_kernel
+        self.MH_kernel = THUGSampler.mh_kernel
         # Store when the switch happend
         self.n_switch = self.n  # store when the switch happens
         self.switched = True
@@ -537,6 +536,12 @@ class SMCAdaptive:
         self.verboseprint("### SWITCHING TO THUG KERNEL ###")
         self.verboseprint("####################################")
         self.verboseprint("\n")
+
+    def initialize_particles(self):
+        """Initializes the particles and stores them in a separate variable, for checking purposes."""
+        z0 = self.initializer()
+        self.starting_particles = z0
+        return z0
 
     def sample(self):
         """Samples using an SMC sampler.
@@ -581,7 +586,7 @@ class SMCAdaptive:
                 self.verboseprint("\tEpsilon: {:.10f}".format(self.εs[self.n]))
 
                 # COMPUTE WEIGHTS (resampling makes sure w = w_incremental)
-                W = self._compute_weights()
+                W = self._compute_weights(z)
                 self.WEIGHTS = vstack((self.WEIGHTS, W))
                 self.ESS     = vstack((self.ESS, 1 / np.sum(W**2)))
                 self.verboseprint("\tWeights computed and normalised.")

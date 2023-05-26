@@ -1,7 +1,7 @@
 from pyparsing import alphanums
 from Manifolds.GeneralizedEllipse import GeneralizedEllipse
 import numpy as np
-from numpy import zeros, eye
+from numpy import zeros, eye, hstack
 from numpy.lib.twodim_base import eye
 from numpy.linalg import norm, solve, cholesky, det
 from scipy.linalg import solve_triangular, qr, lstsq
@@ -130,22 +130,24 @@ class TangentialHugSampler:
         v = v + (self.α / (1 - self.α)) * self.project(v, self.jacobian(x))
         return np.concatenate((x, v))
 
-    def generate_integrator(self, B, δ, α=0.0):
-        """Generates an integrator function ψ. This works well for Markov Snippets."""
+    def generate_hug_integrator(self, B, δ, α=0.0):
+        """Generates an integrator function ψ with α=0.0 fixed. This works well for Markov Snippets.
+        Remember that this outputs a whole trajectory."""
         def ψ(z0):
-            x0, v0s = z0[:self.d], z0[self.d:]
-            v0 = v0s - α * self.project(v0s, self.jacobian(x0))
+            trajectory = zeros((B+1, len(z0)))
+            x0, v0 = z0[:self.d], z0[self.d:]
             v, x = v0, x0
-            for _ in range(B):
+            trajectory[0, :] = z0
+            for b in range(B):
                 x = x + δ*v/2
                 v = v - 2 * self.project(v, self.jacobian(x))
                 x = x + δ*v/2
+                trajectory[b+1, :] = hstack((x, v))
             # Unsqueeze
-            v = v + (α / (1 - α)) * self.project(v, self.jacobian(x))
-            return np.concatenate((x, v))
+            return trajectory
         return ψ
 
-    def mh_kernel(self, x, B, δ, logpi, α=0.0):
+    def mh_kernel(self, x0, B, δ, logpi, α=0.0):
         """Works well for SMC samplers. This is basically to allow for different
         B, δ or logpi at each stage of SMC, while using the same q, the same
         jacobian and projection function."""
