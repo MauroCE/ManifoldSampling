@@ -189,7 +189,7 @@ class MSAdaptive:
             # add distances to storage
             self.DISTANCES = vstack((self.DISTANCES, distances))
             # determine next ε as quantile of distances
-            ε = clip(quantile(unique(distances), self.quantile_value), self.εmin, self.εs[self.n-1])
+            ε = min(self.εs[self.n-1], quantile(unique(distances), self.quantile_value))
             self.εs.append(ε)
             self.log_ηs.append(FilamentaryDistribution(self.manifold.generate_logηε, ε))
 
@@ -491,7 +491,8 @@ class SMCAdaptive:
             # add distances to storage
             self.DISTANCES = vstack((self.DISTANCES, distances))
             # determine next ε as quantile of distances
-            ε = clip(quantile(unique(distances), self.quantile_value), self.εmin, self.εs[self.n-1])
+            # do not use clip because otherwise we will never finish
+            ε = min(self.εs[self.n-1], quantile(unique(distances), self.quantile_value))
             self.εs.append(ε)
             self.log_ηs.append(FilamentaryDistribution(self.manifold.generate_logηε, ε))
 
@@ -624,6 +625,7 @@ class SMCAdaptive:
                             raise ValueError("Invalid switching strategy.")
 
                 self.n += 1
+            self.total_time = time() - start_time
         except (ValueError, KeyboardInterrupt) as e:
             print("Error was raised: ", e)
         return z
