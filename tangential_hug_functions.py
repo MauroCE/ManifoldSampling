@@ -146,27 +146,27 @@ class TangentialHugSampler:
             return np.concatenate((x, v))
         return ψ
 
-    def generate_sampler(self, B, δ, logpi, α=0.0):
-        """Generates a function that gets one THUG sample. Works well for SMC samplers."""
-        def one_step_sampler(x0):
-            v0s = self.q.rvs()
-            logu = np.log(rand())
-            # Squeeze
-            v0 = v0s - α * self.project(v0s, self.jacobian(x0))
-            v, x = v0, x0
-            # Integrate
-            for _ in range(B):
-                x = x + δ*v/2
-                v = v - 2 * self.project(v, self.jacobian(x))
-                x = x + δ*v/2
-            # Unsqueeze
-            v = v + (α / (1 - α)) * self.project(v, self.jacobian(x))
-            # Metropolis-Hastings
-            if logu <= logpi(x) + self.q.logpdf(v) - logpi(x0) - self.q.logpdf(v0s):
-                return x
-            else:
-                return x0
-        return one_step_sampler
+    def mh_kernel(self, x, B, δ, logpi, α=0.0):
+        """Works well for SMC samplers. This is basically to allow for different
+        B, δ or logpi at each stage of SMC, while using the same q, the same
+        jacobian and projection function."""
+        v0s = self.q.rvs()
+        logu = np.log(rand())
+        # Squeeze
+        v0 = v0s - α * self.project(v0s, self.jacobian(x0))
+        v, x = v0, x0
+        # Integrate
+        for _ in range(B):
+            x = x + δ*v/2
+            v = v - 2 * self.project(v, self.jacobian(x))
+            x = x + δ*v/2
+        # Unsqueeze
+        v = v + (α / (1 - α)) * self.project(v, self.jacobian(x))
+        # Metropolis-Hastings
+        if logu <= logpi(x) + self.q.logpdf(v) - logpi(x0) - self.q.logpdf(v0s):
+            return x
+        else:
+            return x0
 
 
 
