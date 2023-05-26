@@ -215,10 +215,10 @@ class MSAdaptive:
             self.δ = clip(exp(log(self.δ) + 0.5*(self.PROP_MOVED[self.n] - self.pm_target)), self.δmin, self.δmax)
             self.δs.append(self.δ)
             self.ψ = self.ψ_generator(self.B, self.δ)
-            self.verboseprint("\tStep-size adapted to: {:.8f}".format(self.δ))
+            self.verboseprint("\tStep-size adapted to: {:.16f}".format(self.δ))
         else:
             self.δs.append(self.δ)
-            self.verboseprint("\tStep-size kept fixed at: {:.8f}".format(self.δ))
+            self.verboseprint("\tStep-size kept fixed at: {:.16f}".format(self.δ))
 
     def switch_integrator(self):
         """Switches from RWM to THUG."""
@@ -262,7 +262,7 @@ class MSAdaptive:
             self.εmax = np.max(distances)
             self.εs.append(self.εmax)
             self.log_ηs.append(FilamentaryDistribution(self.manifold.generate_logηε, self.εmax))
-            self.verboseprint("Setting initial epsilon to εmax = {:.10f}".format(self.εmax))
+            self.verboseprint("Setting initial epsilon to εmax = {:.16f}".format(self.εmax))
         # Keep running until stopping criterion is met
         # In this case we stop if we reach the number of maximum iterations, or
         # if out ε becomes smaller than εmin or if we move less than self.min_pm particles
@@ -279,7 +279,7 @@ class MSAdaptive:
 
                 #### DETERMINE TOLERANCE TO TARGET AT THIS ITERATION
                 self._compute_nth_tolerance(z) # If adaptive, computes εn and logηεn, otherwise does nothing (already available when schedule is fixed)
-                self.verboseprint("\tEpsilon: {:.8f}".format(self.εs[self.n]))
+                self.verboseprint("\tEpsilon: {:.16f}".format(self.εs[self.n]))
 
                 #### COMPUTE WEIGHTS
                 # Log-Denominator: shared for each point in the same trajectory
@@ -309,7 +309,7 @@ class MSAdaptive:
                 #### ADAPT STEP SIZE
                 # Compute proxy acceptance probability
                 self.PROP_MOVED.append(sum(self.K_RESAMPLED[-1] >= 1) / self.N)
-                self.verboseprint("\tProp Moved: {:.3f}".format(self.PROP_MOVED[self.n]))
+                self.verboseprint("\tProp Moved: {:.16f}".format(self.PROP_MOVED[self.n]))
                 # Adapt δ basedn on proxy acceptance probability
                 self._update_δ_and_ψ()
 
@@ -517,10 +517,10 @@ class SMCAdaptive:
         if self.adaptiveδ:
             self.δ = clip(exp(log(self.δ) + 0.5*(self.APS[self.n] - self.pm_target)), self.δmin, self.δmax)
             self.δs.append(self.δ)
-            self.verboseprint("\tStep-size adapted to: {:.8f}".format(self.δ))
+            self.verboseprint("\tStep-size adapted to: {:.16f}".format(self.δ))
         else:
             self.δs.append(self.δ)
-            self.verboseprint("\tStep-size kept fixed at: {:.8f}".format(self.δ))
+            self.verboseprint("\tStep-size kept fixed at: {:.16f}".format(self.δ))
 
     def switch_kernel(self):
         """Switches from RWM to THUG kernels."""
@@ -566,7 +566,7 @@ class SMCAdaptive:
             self.εmax = np.max(self.DISTANCES)
             self.εs.append(self.εmax)
             self.log_ηs.append(FilamentaryDistribution(self.manifold.generate_logηε, self.εmax))
-            self.verboseprint("Setting initial epsilon to εmax = {:.10f}".format(self.εmax))
+            self.verboseprint("Setting initial epsilon to εmax = {:.16f}".format(self.εmax))
 
         self.n = 1
         try:
@@ -584,7 +584,7 @@ class SMCAdaptive:
 
                 # SELECT TOLERANCE
                 self._compute_nth_tolerance(z)
-                self.verboseprint("\tEpsilon: {:.10f}".format(self.εs[self.n]))
+                self.verboseprint("\tEpsilon: {:.16f}".format(self.εs[self.n]))
 
                 # COMPUTE WEIGHTS (resampling makes sure w = w_incremental)
                 W = self._compute_weights(z)
@@ -606,7 +606,7 @@ class SMCAdaptive:
                 z = z_new  # we called it z_new just to compute the AP
                 self.APS.append(ap_hat)
                 self.PARTICLES = vstack((self.PARTICLES, z[None, ...]))
-                self.verboseprint("\tApprox AP: {:.8f}".format(ap_hat))
+                self.verboseprint("\tApprox AP: {:.16f}".format(ap_hat))
 
                 # TUNE STEP SIZE
                 self._update_δ()
@@ -2450,4 +2450,4 @@ class FilamentaryDistribution:
 
     def __repr__(self):
         """Pretty print"""
-        return "Filamentary distribution with ϵ = {:.8f}".format(self.ϵ)
+        return "Filamentary distribution with ϵ = {:.16f}".format(self.ϵ)
