@@ -46,9 +46,13 @@ class GeneralizedEllipse(Manifold):
                 if seed is None:
                     seed = randint(low=1000, high=9999)
                 rng = default_rng(seed=seed)
-                return rng.uniform(low=prior_loc, high=prior_scale, size=(n, len(mu)))
+                ##### We want the prior to be U(-c, c) for some constant c. This means that if c=10 one wants
+                #### U(-10, 10) and not U(0, 10). To get this with scipy we basically need to shift and scale
+                #### loc=-c, scale=2*c will do the job. This is why its different for rng.uniform and
+                ### for udist 
+                return rng.uniform(low=-prior_scale, high=prior_scale, size=(n, len(mu)))
             self.sample_prior = sample_prior_uniform
-            self.logprior     = lambda ξ: udist.logpdf(ξ, loc=prior_loc, scale=prior_scale).sum()
+            self.logprior     = lambda ξ: udist.logpdf(ξ, loc=(-prior_scale), scale=2*prior_scale).sum()
         else:
             raise ValueError("Invalid prior specification.")
 

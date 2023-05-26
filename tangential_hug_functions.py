@@ -28,7 +28,6 @@ class TangentialHugSampler:
         assert isinstance(method, str), "method must be a string."
         assert method in ['qr', 'linear', 'lstsq'], "method must be one of 'qr', 'linear', or 'lstsq'."
         assert len(x0) >= 2, "x0 must be at least 2-dimensional."
-        assert isinstance(verbose, bool), "verbose must be a bool."
         assert isinstance(safe, bool), "safe must be a bool."
 
         # Store arguments

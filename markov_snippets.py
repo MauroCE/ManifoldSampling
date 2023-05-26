@@ -223,8 +223,11 @@ class MSAdaptive:
     def switch_integrator(self):
         """Switches from RWM to THUG."""
         # the next 3 lines are taken verbatim from __init__ when integrator = 'THUG'
-        THUGSampler = TangentialHugSampler(self.manifold.sample(advanced=True), self.B*self.δ, self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method='linear', safe=True)
-        self.ψ_generator = THUGsampler.generate_integrator # again, this takes B, δ and returns an integrator (notice logpi doesn't matter)
+        x0 = self.manifold.sample(advanced=True)
+        self.verboseprint("logprior(x0): ", self.manifold.logprior(x0))
+        self.sampled_x0 = x0
+        THUGSampler = TangentialHugSampler(x0, self.B*self.δ, self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method='linear', safe=True)
+        self.ψ_generator = THUGSampler.generate_integrator # again, this takes B, δ and returns an integrator (notice logpi doesn't matter)
         self.ψ = self.ψ_generator(self.B, self.δ)
         # Store when the switch happend
         self.n_switch = self.n  # store when the switch happens
