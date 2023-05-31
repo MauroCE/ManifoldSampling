@@ -68,7 +68,7 @@ class TangentialHugSampler:
         derivative = self.jacobian(x0)
         if (len(derivative.shape) == 1) and len(derivative) == self.d: # Univariate
             self.project = self._univariate_project
-        elif (len(derivative.shape) == 2) and derivative.shape[0] == self.d: # Multivariate
+        elif (len(derivative.shape) == 2) and derivative.shape[1] == self.d: # Multivariate
             if self.method == 'qr':
                 self.project = self._qr_project
             elif self.method == 'linear':

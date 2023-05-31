@@ -4,7 +4,7 @@ Newer version of Manifold for G-and-K problem.
 import numpy as np
 from numpy import r_, exp, log, vstack, eye, prod, zeros, isfinite, ones, diag, pi
 from numpy.linalg import norm
-from numpy.random import default_rng, randn
+from numpy.random import default_rng, randn, randint
 from scipy.optimize import fsolve
 from scipy.special import ndtri, ndtr, logsumexp
 from scipy.linalg import block_diag
@@ -115,6 +115,14 @@ class GKManifold(Manifold):
         #return self.log_parameter_prior(ξ[:4]) - ξ[4:]@ξ[4:]/2
         return ndist.logpdf(ξ).sum()  # Should be the same as the commented code above
 
+    def sample_prior(self, n, seed=None):
+        """Sample from the prior"""
+        if seed is None:
+            seed = randint(low=1000, high=9999)
+        rng = default_rng(seed=seed)
+        # prior is simply a normal distribution (we use the reparametrization here)
+        return rng.normal(size=(n, self.n))
+
     def logη(self, ξ):
         """log posterior for c-rwm. This is on the manifold."""
         try:
@@ -125,7 +133,7 @@ class GKManifold(Manifold):
         except ValueError as e:
             return -np.inf
 
-    def generate_logηϵ(self, ϵ):
+    def generate_logηε(self, ϵ):
         """Returns the log abc posterior for THUG."""
         if self.kernel_type not in ['normal', 'uniform']:
             raise NotImplementedError
@@ -160,6 +168,11 @@ class GKManifold(Manifold):
     def is_on_manifold(self, ξ, tol=1e-8):
         """Checks if ξ is on the ystar manifold."""
         return np.max(abs(self.q(ξ))) < tol
+
+    def sample(self, advanced=True):
+        """Here the argument advanced is useless but we use it for consistency
+        of interface between manifold classes."""
+        return find_point_on_manifold(ystar=self.ystar, ϵ=100, kernel_type=self.kernel_type)
 
 
 """
