@@ -69,6 +69,7 @@ class MSAdaptive:
         self.quantile_value = SETTINGS['quantile_value'] # Used to determine the next ϵ
         self.initialization = SETTINGS['initialization'] # type of initialization to use
         self.switch_strategy = SETTINGS['switch_strategy'] # strategy used to determine when to switch RWM->THUG.
+        self.stopping_criterion = SETTINGS['stopping_criterion'] # determines strategy used to terminate the algorithm
 
         # Check arguments types
         assert isinstance(self.N,  int), "N must be an integer."
@@ -96,6 +97,7 @@ class MSAdaptive:
         assert isinstance(self.quantile_value, float), "quantile_value must be a float."
         assert isinstance(self.initialization, str), "initialization must be a string."
         assert isinstance(self.switch_strategy, str), "switch_strategy must be a string."
+        assert isinstance(self.stopping_criterion, set), "stopping criterion must be a set."
 
         # Check argument values
         assert self.δ > 0.0, "δ must be larger than 0."
@@ -115,6 +117,8 @@ class MSAdaptive:
         if isinstance(self.z0_manual, np.ndarray):
             if self.z0_manual.shape != (self.N, 2*self.d):
                 raise ValueError("z0_manual must have shape (N, 2d).")
+        assert self.stopping_criterion.issubset({'maxiter', 'εmin', 'pm'}), "stopping criterion must be a subset of maxiter, εmin and pm."
+        assert len(self.stopping_criterion) >= 1, "There must be at least one stopping criterion."
 
         # Create functions and variables based on input arguments
         self.verboseprint = print if self.verbose else lambda *a, **k: None  # Prints only when verbose is true
@@ -176,6 +180,26 @@ class MSAdaptive:
             self.switch = True
         else:
             self.switch = False
+
+        # Choose correct stopping criterion based on user input
+        stopping_criterion_string = ''  # for printing purposes
+        if 'maxiter' in self.stopping_criterion:
+            self.check_iterations = lambda: self.n <= self.maxiter
+            stopping_criterion_string += 'maxiter, '
+        else:
+            self.check_iterations = lambda: True
+        if 'εmin' in self.stopping_criterion:
+            self.check_min_tolerance = lambda: (abs(self.εs[self.n-1]) >= self.εmin)
+            stopping_criterion_string += 'εmin, '
+        else:
+            self.check_min_tolerance = lambda: True
+        if 'pm' in self.stopping_criterion:
+            self.check_pm = lambda: (self.PROP_MOVED[self.n-1] >= self.min_pm)
+            stopping_criterion_string += 'pm.'
+        else:
+            self.check_pm = lambda: True
+        self.check_stopping_criterion = lambda: self.check_iterations() and self.check_min_tolerance() and self.check_pm()
+        self.verboseprint("Stopping criterion: ", stopping_criterion_string)
 
     def _compute_nth_tolerance(self, z):
         """If the εs schedule is fixed, this does nothing. However, if the schedule
@@ -268,7 +292,7 @@ class MSAdaptive:
         # if out ε becomes smaller than εmin or if we move less than self.min_pm particles
         self.n = 1
         try:
-            while (self.n <= self.maxiter) and (abs(self.εs[self.n-1]) >= self.εmin) and (self.PROP_MOVED[self.n-1] >= self.min_pm):
+            while self.check_stopping_criterion(): #(self.n <= self.maxiter) and (abs(self.εs[self.n-1]) >= self.εmin) and (self.PROP_MOVED[self.n-1] >= self.min_pm):
                 self.verboseprint("Iteration: ", self.n)
 
                 #### COMPUTE TRAJECTORIES
@@ -371,6 +395,7 @@ class SMCAdaptive:
         self.quantile_value = SETTINGS['quantile_value'] # Used to determine the next ϵ
         self.initialization = SETTINGS['initialization'] # type of initialization to use
         self.switch_strategy = SETTINGS['switch_strategy'] # strategy used to determine when to switch RWM->THUG.
+        self.stopping_criterion = SETTINGS['stopping_criterion'] # determines strategy used to terminate the algorithm
 
         # Check arguments types
         assert isinstance(self.N,  int), "N must be an integer."
@@ -398,6 +423,7 @@ class SMCAdaptive:
         assert isinstance(self.quantile_value, float), "quantile_value must be a float."
         assert isinstance(self.initialization, str), "initialization must be a string."
         assert isinstance(self.switch_strategy, str), "switch_strategy must be a string."
+        assert isinstance(self.stopping_criterion, set), "stopping criterion must be a set."
 
         # Check argument values
         assert self.δ > 0.0, "δ must be larger than 0."
@@ -420,6 +446,8 @@ class SMCAdaptive:
             # This is an SMC sampler, meaning the particles consist only of the position, not of the velocity.
             # Create a new variable, unique to SMC samplers, that stores the initial positions
             self.x0_manual = self.z0_manual[:, :self.d]
+        assert self.stopping_criterion.issubset({'maxiter', 'εmin', 'pm'}), "stopping criterion must be a subset of maxiter, εmin and pm."
+        assert len(self.stopping_criterion) >= 1, "There must be at least one stopping criterion."
 
 
         # Create functions and variables based on input arguments
@@ -478,6 +506,26 @@ class SMCAdaptive:
             self.switch = True
         else:
             self.switch = False
+
+        # Choose correct stopping criterion based on user input
+        stopping_criterion_string = ''  # for printing purposes
+        if 'maxiter' in self.stopping_criterion:
+            self.check_iterations = lambda: self.n <= self.maxiter
+            stopping_criterion_string += 'maxiter, '
+        else:
+            self.check_iterations = lambda: True
+        if 'εmin' in self.stopping_criterion:
+            self.check_min_tolerance = lambda: (abs(self.εs[self.n-1]) >= self.εmin)
+            stopping_criterion_string += 'εmin, '
+        else:
+            self.check_min_tolerance = lambda: True
+        if 'pm' in self.stopping_criterion:
+            self.check_pm = lambda: (self.PROP_MOVED[self.n-1] >= self.min_pm)
+            stopping_criterion_string += 'pm.'
+        else:
+            self.check_pm = lambda: True
+        self.check_stopping_criterion = lambda: self.check_iterations() and self.check_min_tolerance() and self.check_pm()
+        self.verboseprint("Stopping criterion: ", stopping_criterion_string)
 
     def _compute_nth_tolerance(self, z):
         """If the εs schedule is fixed, this does nothing. However, if the schedule
@@ -570,7 +618,7 @@ class SMCAdaptive:
 
         self.n = 1
         try:
-            while (self.n <= self.maxiter) and (abs(self.εs[self.n-1]) >= self.εmin) and (self.APS[self.n-1] >= self.min_pm):
+            while self.check_stopping_criterion(): #(self.n <= self.maxiter) and (abs(self.εs[self.n-1]) >= self.εmin) and (self.APS[self.n-1] >= self.min_pm):
                 self.verboseprint("Iteration: ", self.n)
 
                 # RESAMPLE PARTICLES
