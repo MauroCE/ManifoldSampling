@@ -132,7 +132,7 @@ class MSAdaptive:
             self.verboseprint("Integrator: THUG.")
             # Instantiate the class, doesn't matter which ξ0 or logpi we use.
             THUGSampler = TangentialHugSampler(self.manifold.sample(advanced=True), self.B*self.δ, self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method='linear', safe=True)
-            self.ψ_generator = THUGsampler.generate_hug_integrator # again, this takes B, δ and returns an integrator (notice logpi doesn't matter)
+            self.ψ_generator = THUGSampler.generate_hug_integrator # again, this takes B, δ and returns an integrator (notice logpi doesn't matter)
             self.ψ = self.ψ_generator(self.B, self.δ)
         else:
             raise ValueError("Unexpected value found for integrator.")
@@ -629,7 +629,6 @@ class SMCAdaptive:
         except (ValueError, KeyboardInterrupt) as e:
             print("Error was raised: ", e)
         return z
-
 
 ### Initialization Functions
 
