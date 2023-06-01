@@ -4,6 +4,8 @@ import numpy as np
 import plotly.graph_objects as go
 from numpy.linalg import norm, inv, solve
 import matplotlib.pyplot as plt
+import matplotlib.colors as mc
+import colorsys
 from scipy.stats import gaussian_kde
 from scipy.stats import expon
 from oct2py import octave
@@ -20,7 +22,7 @@ def logf(xyz):
 
 def logp(xyz, sigma=0.5):
     """
-    This function is used as proposal distribution. It is simply a 2D isotropic 
+    This function is used as proposal distribution. It is simply a 2D isotropic
     normal distribution with scale sigma.
     """
     return multivariate_normal.logpdf(xyz, mean=np.zeros(2), cov=(sigma**2)*np.eye(2))
@@ -36,9 +38,9 @@ def quick_3d_scatter(samples):
     fig = go.Figure(
     data=[
         go.Scatter3d(
-            x=samples[:,0], 
-            y=samples[:,1], 
-            z=samples[:,2], 
+            x=samples[:,0],
+            y=samples[:,1],
+            z=samples[:,2],
             mode="markers",
             marker=dict(
                 size=1.0,
@@ -56,9 +58,9 @@ def quick_3d_scatters(samples, labels, size=1.0, opacity=0.8):
     fig = go.Figure(
         data=[
             go.Scatter3d(
-                x=sample[:,0], 
-                y=sample[:,1], 
-                z=sample[:,2], 
+                x=sample[:,0],
+                y=sample[:,1],
+                z=sample[:,2],
                 mode="markers",
                 name='{}'.format(label),
                 marker=dict(
@@ -80,9 +82,9 @@ def quick_MVN_scatter(samples, target, xlims=[-2, 6], ylims=[-3, 5], figsize=(20
 
     fig, ax = plt.subplots(figsize=figsize)
     if levels is None:
-        ax.contour(x, y, target.pdf(pos), linewidths=lw) 
+        ax.contour(x, y, target.pdf(pos), linewidths=lw)
     else:
-        ax.contour(x, y, target.pdf(pos), linewidths=lw, levels=levels, alpha=alpha, zorder=1, colors=colors) 
+        ax.contour(x, y, target.pdf(pos), linewidths=lw, levels=levels, alpha=alpha, zorder=1, colors=colors)
     ax.scatter(*samples.T)
     if aspect:
         ax.set_aspect("equal")
@@ -106,9 +108,9 @@ def MVN_scatters(samples_list, target, xlims=[-2, 6], ylims=[-3, 5], figsize=(20
         ax = axis
 
     if levels is None:
-        ax.contour(x, y, target.pdf(pos), linewidths=lw) 
+        ax.contour(x, y, target.pdf(pos), linewidths=lw)
     else:
-        ax.contour(x, y, target.pdf(pos), linewidths=lw, levels=levels, alpha=alpha, zorder=1, colors=colors) 
+        ax.contour(x, y, target.pdf(pos), linewidths=lw, levels=levels, alpha=alpha, zorder=1, colors=colors)
     for ix, samples in enumerate(samples_list):
         if labels is None:
             ax.scatter(*samples.T)
@@ -204,7 +206,7 @@ def logf_Jacobian(xy, Sigma, mu):
     1 / Jacobian of log pi
     """
     return - np.log(norm(solve(Sigma, xy - mu)))
-    
+
 
 def prep_contour(xlims, ylims, step, func):
     x = np.arange(*xlims, step)
@@ -226,7 +228,7 @@ def update_scale_sa(ap, ap_star, k, l, exponent=(2/3)):
     ap_star : float
               Target acceptance probability.
 
-    k : int 
+    k : int
         Iteration number. Notice that it must start from 1, not 0!
 
     l : float
@@ -263,10 +265,10 @@ def covariance(samples):
 
 
 def ESS(samples):
-    """Computes multiESS using MATLAB function. Sometimes if the 
+    """Computes multiESS using MATLAB function. Sometimes if the
     samples array has 1 unique sample the output will be complex. In that case we return 0.0 instead.
     Shall I output 1.0 or 0.0? Maybe 0.0 makes more sense?"""
-    ESSval = octave.multiESS(samples, [], "sqroot") 
+    ESSval = octave.multiESS(samples, [], "sqroot")
     return ESSval #if type(ESSval) == float else 0.0
 
 ESS_univariate = lambda samples: tfp.mcmc.effective_sample_size(samples).numpy()
@@ -305,13 +307,13 @@ def quick_MVN_marginals_kdes(sample_list, target, labels, lims=(-4, 4), figsize=
 
 def box_plot(ax, data, edge_color, fill_color, positions, labels=None, widths=0.2):
     bp = ax.boxplot(data, patch_artist=True, positions=positions, widths=widths)
-    
+
     for element in ['boxes', 'whiskers', 'fliers', 'means', 'medians', 'caps']:
         plt.setp(bp[element], color=edge_color)
 
     for patch in bp['boxes']:
-        patch.set(facecolor=fill_color)      
-        
+        patch.set(facecolor=fill_color)
+
     for patch in bp['fliers']:
         patch.set(markeredgecolor=edge_color)
     return bp
@@ -351,7 +353,7 @@ def test_circle(x0, n, q, δ, α, grad_logπ, logπ):
         ĝ = g / norm(g)
         v = v0 - 2*(v0 @ ĝ) * ĝ
         thug_moves.append(x + δ*v/2)
-    return max(abs(logπ(hug_moves) - logπ(x0))), max(abs(logπ(thug_moves) - logπ(x0)))  
+    return max(abs(logπ(hug_moves) - logπ(x0))), max(abs(logπ(thug_moves) - logπ(x0)))
 
 
 def ar_and_var_change_for_hug_thug(x0, T, B, N, αs, q, logπ, grad_logπ, Hug, HugTangential):
@@ -391,7 +393,7 @@ def line_perp_v_through_point(v, point, xvalues):
 
 
 def line_between(point1, point2):
-    """Returns array that can be used to plot line between point1 and point2. Example: 
+    """Returns array that can be used to plot line between point1 and point2. Example:
     ```
     plt.plot(*line_between(point1, point2), color='k', lw=2)
     ```
@@ -412,3 +414,21 @@ def generate_powers_of_ten(max_exponent, min_exponent):
     """E.g. generate_powers_of_ten(2, -1) will return 100, 10, 0, 0.1."""
     number_of_powers = max_exponent + abs(min_exponent) + 1
     return np.logspace(start=max_exponent, stop=min_exponent, num=number_of_powers, endpoint=True)
+
+
+def lighten_color(color, amount=0.5):
+    """
+    Lightens the given color by multiplying (1-luminosity) by the given amount.
+    Input can be matplotlib color string, hex string, or RGB tuple.
+
+    Examples:
+    >> lighten_color('g', 0.3)
+    >> lighten_color('#F034A3', 0.6)
+    >> lighten_color((.3,.55,.1), 0.5)
+    """
+    try:
+        c = mc.cnames[color]
+    except:
+        c = color
+    c = colorsys.rgb_to_hls(*mc.to_rgb(c))
+    return colorsys.hls_to_rgb(c[0], 1 - amount * (1 - c[1]), c[2])
