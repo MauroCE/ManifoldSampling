@@ -11,6 +11,8 @@ from scipy.stats import multivariate_normal as MVN
 from scipy.special import logsumexp
 from time import time
 from copy import deepcopy
+import multiprocessing #from pathos.multiprocessing import ProcessingPool as Pool #from multiprocessing import Pool
+from itertools import product
 
 from RWM import RWM, generate_RWMIntegrator
 # from tangential_hug_functions import HugTangentialMultivariate
@@ -18,8 +20,6 @@ from RWM import RWM, generate_RWMIntegrator
 from Manifolds.Manifold import Manifold
 from tangential_hug_functions import TangentialHugSampler
 from Manifolds.GKManifoldNew import find_point_on_manifold
-
-### Markov Snippets classes (Multivariate, i.e. use a Jacobian, not a gradient)
 
 
 ##### SINGLE MARKOV SNIPPETS CLASS: MULTI AND UNI VARIATE, ADAPTS BOTH TOLERANCES AND DELTA
@@ -464,7 +464,7 @@ class SMCAdaptive:
         elif self.integrator.lower() == 'thug':
             self.verboseprint("Stochastic Kernel: THUG.")
             # Instantiate the class, doesn't matter which ξ0 or logpi we use.
-            THUGSampler = TangentialHugSampler(self.manifold.sample(advanced=True), self.B*self.δ, self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method='linear', safe=True)
+            self.THUGSampler = TangentialHugSampler(self.manifold.sample(advanced=True), self.B*self.δ, self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method='linear', safe=True)
             self.MH_kernel = self.THUGSampler.mh_kernel
         else:
             raise ValueError("Unexpected value found for stochastic kernel.")
@@ -520,7 +520,7 @@ class SMCAdaptive:
         else:
             self.check_min_tolerance = lambda: True
         if 'pm' in self.stopping_criterion:
-            self.check_pm = lambda: (self.PROP_MOVED[self.n-1] >= self.min_pm)
+            self.check_pm = lambda: (self.APS[self.n-1] >= self.min_pm)
             stopping_criterion_string += 'pm.'
         else:
             self.check_pm = lambda: True
