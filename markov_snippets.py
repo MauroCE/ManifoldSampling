@@ -233,8 +233,10 @@ class MSAdaptive:
         # Choose resampling scheme
         if self.resampling_scheme == 'multinomial':
             resample = lambda W: self.resampling_rng.choice(a=arange(self.N*(self.B+1)), size=self.N, p=W.flatten())
+            self.verboseprint("Resampling: MULTINOMIAL.")
         elif self.resampling_scheme == 'systematic':
             resample = lambda W: systematic(W.flatten(), self.N)
+            self.verboseprint("Resampling: SYSTEMATIC.")
         else:
             raise ValueError("Resampling scheme must be either multinomial or systematic.")
         self._resample = resample
