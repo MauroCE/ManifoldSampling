@@ -5,7 +5,7 @@ from numpy import zeros, eye, hstack
 from numpy.lib.twodim_base import eye
 from numpy.linalg import norm, solve, cholesky, det
 from scipy.linalg import solve_triangular, qr, lstsq
-from numpy.random import rand
+from numpy.random import rand, default_rng, randint
 from scipy.stats import multivariate_normal
 from Manifolds.RotatedEllipse import RotatedEllipse
 from Zappa.zappa import zappa_step_accept, zappa_step_acceptPC
@@ -16,7 +16,7 @@ from warnings import catch_warnings, filterwarnings
 
 class TangentialHugSampler:
 
-    def __init__(self, x0, T, B, N, α, logpi, jac, method='qr', safe=True):
+    def __init__(self, x0, T, B, N, α, logpi, jac, method='qr', safe=True, seed=None):
         """This class works for both univariate and multivariate problems."""
         # Check Arguments
         assert isinstance(x0, np.ndarray), "Initial point must be a numpy array."
@@ -29,6 +29,7 @@ class TangentialHugSampler:
         assert method in ['qr', 'linear', 'lstsq'], "method must be one of 'qr', 'linear', or 'lstsq'."
         assert len(x0) >= 2, "x0 must be at least 2-dimensional."
         assert isinstance(safe, bool), "safe must be a bool."
+        assert isinstance(seed, int) or (seed is None), "seed must be an integer or None."
 
         # Store arguments
         self.x0    = x0
@@ -41,6 +42,10 @@ class TangentialHugSampler:
         self.method = method
         self.safe   = safe
         self.δ      = self.T / self.B
+        if seed is None:
+            seed = randint(low=1000, high=9999)
+        self.seed   = seed
+        self.rng    = default_rng(seed=self.seed)
 
         # Create proposal distribution
         self.d = len(x0)
@@ -100,10 +105,10 @@ class TangentialHugSampler:
         """Samples using Tangential Hug."""
         samples, acceptances = self.x0, zeros(self.N)
         x0 = self.x0
-        logu = np.log(rand(self.N))
+        logu = np.log(self.rng.uniform(low=0.0, high=1.0, size=self.N))
         for i in range(self.N):
-            v0s = self.q.rvs()
-            z   = sefl.integrator(np.concatenate((x0, v0s)))
+            v0s = self.rng.normal(loc=0.0, scale=1.0, size=self.d)#self.q.rvs()
+            z   = self.integrator(np.concatenate((x0, v0s)))
             x, v = z[:self.d], z[self.d:]
             if logu[i] <= self.logpi(x) + self.q.logpdf(v) - self.logpi(x0) - self.q.logpdf(v0s):
                 samples = np.vstack((samples, x))
@@ -147,12 +152,15 @@ class TangentialHugSampler:
             return trajectory
         return ψ
 
-    def mh_kernel(self, x0, B, δ, logpi, α=0.0):
+    def mh_kernel(self, x0, B, δ, logpi, seed = None, α=0.0):
         """Works well for SMC samplers. This is basically to allow for different
         B, δ or logpi at each stage of SMC, while using the same q, the same
         jacobian and projection function."""
-        v0s = self.q.rvs()
-        logu = np.log(rand())
+        if seed is None:
+            seed = randint(low=1000, high=9999)
+        rng = default_rng(seed=seed)
+        v0s = rng.normal(loc=0.0, scale=1.0, size=self.d)#self.q.rvs()
+        logu = np.log(rng.uniform())
         # Squeeze
         v0 = v0s - α * self.project(v0s, self.jacobian(x0))
         v, x = v0, x0

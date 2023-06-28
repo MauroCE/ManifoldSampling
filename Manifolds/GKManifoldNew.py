@@ -3,6 +3,7 @@ Newer version of Manifold for G-and-K problem.
 """
 import numpy as np
 from numpy import r_, exp, log, vstack, eye, prod, zeros, isfinite, ones, diag, pi
+from numpy import tanh, cosh
 from numpy.linalg import norm
 from numpy.random import default_rng, randn, randint
 from scipy.optimize import fsolve
@@ -23,13 +24,15 @@ from Manifolds.Manifold import Manifold
 
 
 class GKManifold(Manifold):
-    def __init__(self, ystar, kernel_type='normal', use_autograd=False):
+    def __init__(self, ystar, kernel_type='normal', use_autograd=False, θtrue=None):
         assert kernel_type in ['normal', 'uniform']
         self.m = len(ystar)            # Number constraints = dimensionality of the data
         self.d = 4                     # Manifold has dimension 4 (like the parameter θ)
         self.n = self.d + self.m       # Dimension of ambient space is m + 4
         self.ystar = ystar
         self.kernel_type = kernel_type
+        if θtrue is not None:
+            self.θtrue = θtrue
         # N(0, 1) ---> U(0, 10).
         self.G    = lambda θ: 10*ndtr(θ)
         # U(0, 10) ---> N(0, 1)
@@ -46,8 +49,8 @@ class GKManifold(Manifold):
             filterwarnings('error')
             try:
                 return (ξ[0] + ξ[1]*(1 + 0.8*(1 - exp(-ξ[2]*ξ[4:]))/(1 + exp(-ξ[2]*ξ[4:]))) * ((1 + ξ[4:]**2)**ξ[3])*ξ[4:]) - self.ystar
-            except RuntimeWarning:
-                raise ValueError("Constraint found Overflow warning.")
+            except RuntimeWarning as e:
+                raise ValueError("Constraint found Overflow warning: ", e)
 
     def _q_raw_uniform(self, ξ):
         """Constraint function expecting ξ[:4] ~ U(0, 10). It doesn't do any warning check."""
@@ -71,19 +74,35 @@ class GKManifold(Manifold):
             filterwarnings('error')
             try:
                 return self.q_autograd_raw(ξ)
-            except RuntimeWarning:
-                raise ValueError("Constraint found Overflow warning.")
+            except RuntimeWarning as e:
+                raise ValueError("Constraint found Overflow warning: ", e)
+
+    # def Q(self, ξ):
+    #     """Transpose of Jacobian for G and K. """
+    #     ξ = r_[self.G(ξ[:4]), ξ[4:]]
+    #     return vstack((
+    #     ones(len(ξ[4:])),
+    #     (1 + 0.8 * (1 - exp(-ξ[2] * ξ[4:])) / (1 + exp(-ξ[2] * ξ[4:]))) * ((1 + ξ[4:]**2)**ξ[3]) * ξ[4:],
+    #     8 * ξ[1] * (ξ[4:]**2) * ((1 + ξ[4:]**2)**ξ[3]) * exp(ξ[2]*ξ[4:]) / (5 * (1 + exp(ξ[2]*ξ[4:]))**2),
+    #     ξ[1]*ξ[4:]*((1+ξ[4:]**2)**ξ[3])*(1 + 9*exp(ξ[2]*ξ[4:]))*log(1 + ξ[4:]**2) / (5*(1 + exp(ξ[2]*ξ[4:]))),
+    #     diag(ξ[1]*((1+ξ[4:]**2)**(ξ[3]-1))*(((18*ξ[3] + 9)*(ξ[4:]**2) + 9)*exp(2*ξ[2]*ξ[4:]) + (8*ξ[2]*ξ[4:]**3 + (20*ξ[3] + 10)*ξ[4:]**2 + 8*ξ[2]*ξ[4:] + 10)*exp(ξ[2]*ξ[4:]) + (2*ξ[3] + 1)*ξ[4:]**2 + 1) / (5*(1 + exp(ξ[2]*ξ[4:]))**2))
+    # ))
 
     def Q(self, ξ):
-        """Transpose of Jacobian for G and K. """
+        """Transpose of Jacobian for G and K. Expects θ to be normally distributed.
+        Hence we first transform it to uniform and then we compute the transpose of
+        the Jacobian. This version is newer and uses Prangle's expression for the Jacobian."""
         ξ = r_[self.G(ξ[:4]), ξ[4:]]
-        return vstack((
-        ones(len(ξ[4:])),
-        (1 + 0.8 * (1 - exp(-ξ[2] * ξ[4:])) / (1 + exp(-ξ[2] * ξ[4:]))) * ((1 + ξ[4:]**2)**ξ[3]) * ξ[4:],
-        8 * ξ[1] * (ξ[4:]**2) * ((1 + ξ[4:]**2)**ξ[3]) * exp(ξ[2]*ξ[4:]) / (5 * (1 + exp(ξ[2]*ξ[4:]))**2),
-        ξ[1]*ξ[4:]*((1+ξ[4:]**2)**ξ[3])*(1 + 9*exp(ξ[2]*ξ[4:]))*log(1 + ξ[4:]**2) / (5*(1 + exp(ξ[2]*ξ[4:]))),
-        diag(ξ[1]*((1+ξ[4:]**2)**(ξ[3]-1))*(((18*ξ[3] + 9)*(ξ[4:]**2) + 9)*exp(2*ξ[2]*ξ[4:]) + (8*ξ[2]*ξ[4:]**3 + (20*ξ[3] + 10)*ξ[4:]**2 + 8*ξ[2]*ξ[4:] + 10)*exp(ξ[2]*ξ[4:]) + (2*ξ[3] + 1)*ξ[4:]**2 + 1) / (5*(1 + exp(ξ[2]*ξ[4:]))**2))
-    ))
+        a, b, g, k = ξ[:4]
+        z = ξ[4:]
+        Da = ones(len(z))
+        Db = (1 + 0.8*tanh(g*z/2))*z*(1+z**2)**k
+        Dg = b*z*((1+z**2)**k)*0.8*(z/2)*(1 - tanh(g*z/2)**2)
+        Dk = b*(1 + 0.8*tanh(g*z/2))*z*((1 + z**2)**k)*log(1 + z**2)
+        # Dz = b*((1+z**2)**k)*((1+0.8*tanh(g*z/2))*((1 + (2*k+1)*(z**2))/(1+z**2)) + 0.8*g*z/(2*cosh(g*z/2)**2))
+        # use 1/cosh(x)**2 = 1 - tanh(x)**2
+        Dz = b*((1+z**2)**k)*((1+0.8*tanh(g*z/2))*((1 + (2*k+1)*(z**2))/(1+z**2)) + 0.8*g*z*(1 - tanh(g*z/2)**2))
+        return vstack((Da, Db, Dg, Dk, diag(Dz)))
 
     def J(self, ξ):
         """Safely computes Jacobian."""
@@ -91,8 +110,9 @@ class GKManifold(Manifold):
             filterwarnings('error')
             try:
                 return self.Q(ξ).T
-            except RuntimeWarning:
-                raise ValueError("J computation found Runtime warning.")
+            except RuntimeWarning as e:
+                print(ξ)
+                raise ValueError("J computation found Runtime warning: ", e)
 
     def fullJacobian(self, ξ):
         """J_f(G(ξ)) * J_G(ξ)."""
@@ -142,15 +162,14 @@ class GKManifold(Manifold):
                 def log_abc_posterior(ξ):
                     """Log-ABC-posterior."""
                     u = self.q(ξ)
-                    m = len(u)
-                    return self.logprior(ξ) - u@u/(2*ϵ**2) - m*log(ϵ) - m*log(2*pi)/2
+                    return self.logprior(ξ) - u@u/(2*ϵ**2) - self.m*log(ϵ) - self.m*log(2*pi)/2
                 return log_abc_posterior
             else:
                 # uniform kernel
                 def log_abc_posterior(ξ):
                     with np.errstate(divide='ignore'):
                         try:
-                            return log(float(norm(self.q(ξ)) <= ϵ)) - self.m*log(ϵ)
+                            return self.logprior(ξ) + log(float(norm(self.q(ξ)) <= ϵ)) - self.m*log(ϵ)
                         except ValueError:
                             return -np.inf
                 return log_abc_posterior
@@ -169,10 +188,13 @@ class GKManifold(Manifold):
         """Checks if ξ is on the ystar manifold."""
         return np.max(abs(self.q(ξ))) < tol
 
-    def sample(self, advanced=True):
+    def sample(self, advanced=True, fromtheta=False):
         """Here the argument advanced is useless but we use it for consistency
         of interface between manifold classes."""
-        return find_point_on_manifold(ystar=self.ystar, ϵ=100, kernel_type=self.kernel_type)
+        if not fromtheta:
+            return find_point_on_manifold(ystar=self.ystar, ϵ=100, kernel_type=self.kernel_type)
+        else:
+            return find_point_on_manifold_from_θ(ystar=self.ystar, θfixed_unif=self.θtrue, ϵ=100, kernel_type=self.kernel_type)
 
 
 """
@@ -197,11 +219,11 @@ def find_point_on_manifold(ystar, ϵ, max_iter=1000, tol=1.49012e-08, kernel_typ
             i += 1
             try:
                 # Sample θ from U(0, 10)
-                θfixed = randn(4)
-                function = lambda z: manifold._q_raw_normal(r_[θfixed, z])
+                θfixed_normal = randn(4)
+                function = lambda z: manifold._q_raw_normal(r_[θfixed_normal, z])
                 z_guess  = randn(manifold.m)
                 z_found  = fsolve(function, z_guess, xtol=tol)
-                ξ_found  = r_[θfixed, z_found]
+                ξ_found  = r_[θfixed_normal, z_found]
                 if not isfinite([log_abc_posterior(ξ_found)]):
                     pass
                 else:
@@ -213,14 +235,19 @@ def find_point_on_manifold(ystar, ϵ, max_iter=1000, tol=1.49012e-08, kernel_typ
         resetwarnings()
         raise ValueError("Couldn't find a point, try again.")
 
-
-def find_point_on_manifold_from_θ(ystar, θfixed, ϵ, maxiter=2000, tol=1.49012e-08, kernel_type='normal'):
+def find_point_on_manifold_from_θ(ystar, θfixed_unif, ϵ, maxiter=2000, tol=1.49012e-08, kernel_type='normal'):
     """Same as the above but we provide the θfixed. Can be used to find a point where
-    the theta is already θ0."""
+    the theta is already θ0.
+    Notice that by default we expect θfixed_unif=θ0 which in our experiments is
+    array([3.0, 1.0, 2.0, 0.5]). Notice that this is Uniformly distributed,
+    not normally distributed."""
     i = 0
-    manifold = GKManifold(ystar=ystar, kernel_type=kernel_type)
+    manifold = GKManifold(ystar=ystar, kernel_type=kernel_type, θtrue=θfixed_unif) # expect uniformly distributed
     log_abc_posterior = manifold.generate_logηϵ(ϵ)
-    function = lambda z: manifold._q_raw_normal(r_[θfixed, z])
+    # notice that we always work directly on the normally distributed one, rather than the uniformly distributed
+    # one since that's the space I will be working on.
+    θfixed_normal = ndtri(θfixed_unif/10)
+    function = lambda z: manifold._q_raw_normal(r_[θfixed_normal, z])
     with catch_warnings():
         filterwarnings('error')
         while i <= maxiter:
@@ -228,7 +255,7 @@ def find_point_on_manifold_from_θ(ystar, θfixed, ϵ, maxiter=2000, tol=1.49012
             try:
                 z_guess  = randn(manifold.m)
                 z_found  = fsolve(function, z_guess, xtol=tol)
-                ξ_found  = r_[θfixed, z_found]
+                ξ_found  = r_[θfixed_normal, z_found]
                 if not isfinite([log_abc_posterior(ξ_found)]):
                     resetwarnings()
                     raise ValueError("Couldn't find a point.")

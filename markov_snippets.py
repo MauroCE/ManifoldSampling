@@ -46,7 +46,7 @@ class MSAdaptive:
         # Store variables
         self.N    = SETTINGS['N']          # Number of particles
         self.B    = SETTINGS['B']          # Number of integration steps
-        self.δ    = SETTINGS['δ']          # Step-size for each integration step
+        self.δ    = SETTINGS['δ']          # Step-size for each integration step, can be either float or 2 steps sizes if RWM and THUG are both used
         self.d    = SETTINGS['d']          # Dim of x-component of particle
         self.δmin = SETTINGS['δmin']       # δ ≧ δmin when adaptive
         self.δmax = SETTINGS['δmax']       # δ ≦ δmax when step size is adaptive
@@ -69,12 +69,14 @@ class MSAdaptive:
         self.quantile_value = SETTINGS['quantile_value'] # Used to determine the next ϵ
         self.initialization = SETTINGS['initialization'] # type of initialization to use
         self.switch_strategy = SETTINGS['switch_strategy'] # strategy used to determine when to switch RWM->THUG.
+        self.resampling_seed = SETTINGS['resampling_seed'] # seed for resampling
+        self.resampling_scheme = SETTINGS['resampling_scheme'] # resampling scheme to use
         self.stopping_criterion = SETTINGS['stopping_criterion'] # determines strategy used to terminate the algorithm
 
         # Check arguments types
         assert isinstance(self.N,  int), "N must be an integer."
         assert isinstance(self.B, int), "B must be an integer."
-        assert isinstance(self.δ, float), "δ must be a float."
+        assert isinstance(self.δ, float) or isinstance(self.δ, list), "δ must be a float or a list."
         assert isinstance(self.d, int), "d must be an integer."
         assert isinstance(self.δmin, float), "δmin must be float."
         assert isinstance(self.δmax, float), "δmax must be float."
@@ -87,57 +89,81 @@ class MSAdaptive:
         assert isinstance(self.adaptiveε, bool), "adaptiveϵ must be bool."
         assert isinstance(self.adaptiveδ, bool), "adaptiveδ must be bool."
         assert isinstance(self.z0_manual, np.ndarray) or (self.z0_manual is None), "z0_manual must be a numpy array or None."
-        assert isinstance(self.pm_target, float), "pm_target must be float."
+        assert isinstance(self.pm_target, float) or isinstance(self.pm_target, list), "pm_target must be float or list."
         assert isinstance(self.pm_switch, float), "pm_switch must be float."
         assert isinstance(self.prior_seed, int), "prior_seed must be integer."
         assert isinstance(self.low_memory, bool), "low_memory must be bool."
         assert isinstance(self.integrator, str), "integrator must be a string."
         assert isinstance(self.εprop_switch, float), "εprop_switch must be a float."
         assert (self.ε0_manual is None) or isinstance(self.ε0_manual, float), "ε0_manual must be float or None."
-        assert isinstance(self.quantile_value, float), "quantile_value must be a float."
+        assert isinstance(self.quantile_value, float) or isinstance(self.quantile_value, list), "quantile_value must be a float or list."
         assert isinstance(self.initialization, str), "initialization must be a string."
         assert isinstance(self.switch_strategy, str), "switch_strategy must be a string."
+        assert isinstance(self.resampling_seed, int), "resampling seed must be integer."
+        assert isinstance(self.resampling_scheme, str), "resampling_scheme must be a string."
         assert isinstance(self.stopping_criterion, set), "stopping criterion must be a set."
 
         # Check argument values
-        assert self.δ > 0.0, "δ must be larger than 0."
+        if isinstance(self.δ, float):
+            assert self.δ > 0.0, "δ must be larger than 0."
+        elif isinstance(self.δ, list) and (self.integrator.lower() == 'rwm_then_thug') and (not self.adaptiveδ):
+            assert len(self.δ) == 2, "if δ is a list, must have length 2."
+            for δ in self.δ:
+                assert isinstance(δ, float) and δ > 0.0, "each δ in the list of δs must be a float and positive."
+        else:
+            raise ValueError("δ can only be a list when using rwm_then_thug integratora and adaptiveδ=False.")
         assert (self.εs_fixed is None) or all(x>y for x, y in zip(self.εs_fixed, self.εs_fixed[1:])), "εs must be a strictly decreasing list, or None."
         assert self.δmin > 0.0, "δmin must be larger than 0."
         assert self.δmin <= self.δmax, "δmin must be less than or equal to δmax."
         assert self.εmin > 0.0, "εmin must be larger than 0."
         assert (self.min_pm >= 0.0) and (self.min_pm <= 1.0), "min_pm must be in [0, 1]."
-        assert (self.pm_target >= 0) and (self.pm_target <= 1.0), "pm_target must be in [0, 1]."
+        if isinstance(self.pm_target, float):
+            assert (self.pm_target >= 0) and (self.pm_target <= 1.0), "pm_target must be in [0, 1]."
+        elif isinstance(self.pm_target, list) and (self.integrator.lower() != 'rwm_then_thug'):
+            raise ValueError("pm_target must be float if integrator is not rwm_then_thug.")
+        else: # is it a list and the integrator is rwm_then_thug
+            for pmt in self.pm_target:
+                assert (pmt >= 0) and (pmt <= 1.0), "each element in pm_target must be in [0, 1]."
         assert (self.pm_switch >= 0) and (self.pm_switch <= 1.0), "pm_switch must be in [0, 1]."
         assert self.integrator.lower() in ['rwm', 'thug', 'rwm_then_thug'], "integrator must be one of 'RWM', 'THUG', or 'RWM_THEN_THUG'."
         assert (self.εprop_switch >= 0.0) and (self.εprop_switch <= 1.0), "εprop_switch must be in [0, 1]."
         assert (self.ε0_manual is None) or (self.ε0_manual >= 0.0), "ε0_manual must be larger than 0 or must be None."
-        assert (self.quantile_value >= 0) and (self.quantile_value <= 1.0), "quantile_value must be in [0, 1]."
+        if isinstance(self.quantile_value, float):
+            assert (self.quantile_value >= 0) and (self.quantile_value <= 1.0), "quantile_value must be in [0, 1]."
+        elif isinstance(self.quantile_value, list) and (self.integrator.lower() == 'rwm_then_thug'):
+            assert len(self.quantile_value) == 2, "When quantile_value is a list, it must have two elements."
+            for q in self.quantile_value:
+                assert isinstance(q, float), "each quantile_value must be a float."
+        else:
+            raise ValueError("quantile_value must be float, or can be a list of length 2 with 2 float only when the integrator is rwm_then_thug.")
         assert self.initialization in ['prior', 'manual'], "initialization must be one of 'prior' or 'manual'."
         assert self.switch_strategy in ['εprop', 'pm'], "switch_strategy must be one of 'εprop' or 'pm'."
         if isinstance(self.z0_manual, np.ndarray):
             if self.z0_manual.shape != (self.N, 2*self.d):
                 raise ValueError("z0_manual must have shape (N, 2d).")
         assert self.stopping_criterion.issubset({'maxiter', 'εmin', 'pm'}), "stopping criterion must be a subset of maxiter, εmin and pm."
+        assert self.resampling_scheme in ['multinomial', 'systematic'], "resampling scheme must be one of multinomial or resampling."
         assert len(self.stopping_criterion) >= 1, "There must be at least one stopping criterion."
 
         # Create functions and variables based on input arguments
         self.verboseprint = print if self.verbose else lambda *a, **k: None  # Prints only when verbose is true
         self.univariate = True if (self.manifold.get_codimension() == 1) else False # basically keeps track if it is uni or multi variate.
-        self.δs = [self.δ]
         self.switched = False
+        self.δs = [self._get_δ()]
+        self.resampling_rng = default_rng(seed=self.resampling_seed)
 
         # Choose correct integrator to use
         if (self.integrator.lower() == 'rwm') or (self.integrator.lower() == 'rwm_then_thug'):
             # Choose Random Walk Metropolis integrator
             self.verboseprint("Integrator: RWM.")
             self.ψ_generator = lambda B, δ: generate_RWMIntegrator(B, δ) # This is now a function that given B, δ it returns a function that integrates with those parameters
-            self.ψ = self.ψ_generator(self.B, self.δ)
+            self.ψ = self.ψ_generator(self.B, self._get_δ())
         elif self.integrator.lower() == 'thug':
             self.verboseprint("Integrator: THUG.")
             # Instantiate the class, doesn't matter which ξ0 or logpi we use.
-            THUGSampler = TangentialHugSampler(self.manifold.sample(advanced=True), self.B*self.δ, self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method='linear', safe=True)
+            THUGSampler = TangentialHugSampler(self.manifold.sample(advanced=True), self.B*self._get_δ(), self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method='linear', safe=True)
             self.ψ_generator = THUGSampler.generate_hug_integrator # again, this takes B, δ and returns an integrator (notice logpi doesn't matter)
-            self.ψ = self.ψ_generator(self.B, self.δ)
+            self.ψ = self.ψ_generator(self.B, self._get_δ())
         else:
             raise ValueError("Unexpected value found for integrator.")
 
@@ -164,6 +190,8 @@ class MSAdaptive:
                 self.εs = self.εs_fixed
                 self.log_ηs = [FilamentaryDistribution(self.manifold.generate_logηε, ε) for ε in self.εs]
                 self.initializer = lambda: self.z0_manual
+                # Since εs are provided, we need to fix maxiter to its length
+                self.maxiter = len(self.εs)
             else:
                 raise ValueError("Invalid initialization specifications.")
         else:
@@ -183,8 +211,9 @@ class MSAdaptive:
 
         # Choose correct stopping criterion based on user input
         stopping_criterion_string = ''  # for printing purposes
-        if 'maxiter' in self.stopping_criterion:
-            self.check_iterations = lambda: self.n <= self.maxiter
+        if ('maxiter' in self.stopping_criterion) or (not self.adaptiveε):
+            maximum_iterations = self.maxiter if self.adaptiveε else len(self.εs)-1
+            self.check_iterations = lambda: self.n <= maximum_iterations
             stopping_criterion_string += 'maxiter, '
         else:
             self.check_iterations = lambda: True
@@ -201,6 +230,40 @@ class MSAdaptive:
         self.check_stopping_criterion = lambda: self.check_iterations() and self.check_min_tolerance() and self.check_pm()
         self.verboseprint("Stopping criterion: ", stopping_criterion_string)
 
+        # Choose resampling scheme
+        if self.resampling_scheme == 'multinomial':
+            resample = lambda W: self.resampling_rng.choice(a=arange(self.N*(self.B+1)), size=self.N, p=W.flatten())
+        elif self.resampling_scheme == 'systematic':
+            resample = lambda W: systematic(W.flatten(), self.N)
+        else:
+            raise ValueError("Resampling scheme must be either multinomial or systematic.")
+        self._resample = resample
+
+    def _get_δ(self):
+        """Grabs δ. This is now needed because we are allowing self.δ to be a list of
+        two δs when using rwm_then_thug. For that reason, self.δ could be a list and so
+        whenever we call self.δ things would break. This function basically allows us to
+        use the correct δ."""
+        if isinstance(self.δ, list) and (not self.switched):
+            return self.δ[0]
+        elif isinstance(self.δ, list) and self.switched:
+            return self.δ[1]
+        elif isinstance(self.δ, float):
+            return self.δ
+        else:
+            raise ValueError("Something went wrong when grabbing δ.")
+
+    def _get_quantile_value(self):
+        """Grabs the quantile value in a similar way in which _get_δ() grabs δ."""
+        if isinstance(self.quantile_value, list) and (not self.switched):
+            return self.quantile_value[0]
+        elif isinstance(self.quantile_value, list) and self.switched:
+            return self.quantile_value[1]
+        elif isinstance(self.quantile_value, float):
+            return self.quantile_value
+        else:
+            raise ValueError("Couldnt get quantile value. ")
+
     def _compute_nth_tolerance(self, z):
         """If the εs schedule is fixed, this does nothing. However, if the schedule
         is adaptive (i.e. self.adaptiveε == True), then we compute it as a quantile
@@ -211,11 +274,19 @@ class MSAdaptive:
             # compute distances
             distances = self.compute_distances(z[:, :self.d])
             # add distances to storage
-            self.DISTANCES = vstack((self.DISTANCES, distances))
+            self._update_distances(distances)
             # determine next ε as quantile of distances
-            ε = min(self.εs[self.n-1], quantile(unique(distances), self.quantile_value))
+            ε = min(self.εs[self.n-1], quantile(unique(distances), self._get_quantile_value()))
             self.εs.append(ε)
             self.log_ηs.append(FilamentaryDistribution(self.manifold.generate_logηε, ε))
+
+    def _update_distances(self, distances):
+        """This is used to either append or overwrite distances based on whether
+        the parameter low_memory is true."""
+        if self.low_memory:
+            self.DISTANCES = distances
+        else:
+            self.DISTANCES = vstack((self.DISTANCES, distances))
 
     def _compute_weights(self, log_μnm1_z, log_μn_ψk_z):
         """Computes weights using the log-sum-exp trick."""
@@ -236,22 +307,22 @@ class MSAdaptive:
         we keep it the same. When adapting δ, we must remember to adapt ψ since
         now the integrator will be different."""
         if self.adaptiveδ:
-            self.δ = clip(exp(log(self.δ) + 0.5*(self.PROP_MOVED[self.n] - self.pm_target)), self.δmin, self.δmax)
+            self.δ = clip(exp(log(self.δ) + 0.5*(self.PROP_MOVED[self.n] - self._get_pm_target())), self.δmin, self.δmax)
             self.δs.append(self.δ)
             self.ψ = self.ψ_generator(self.B, self.δ)
             self.verboseprint("\tStep-size adapted to: {:.16f}".format(self.δ))
         else:
-            self.δs.append(self.δ)
-            self.verboseprint("\tStep-size kept fixed at: {:.16f}".format(self.δ))
+            self.δs.append(self._get_δ())
+            self.verboseprint("\tStep-size kept fixed at: {:.16f}".format(self._get_δ()))
 
     def switch_integrator(self):
         """Switches from RWM to THUG."""
         # the next 3 lines are taken verbatim from __init__ when integrator = 'THUG'
         x0 = self.manifold.sample(advanced=True)
         self.sampled_x0 = x0
-        THUGSampler = TangentialHugSampler(x0, self.B*self.δ, self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method='linear', safe=True)
+        THUGSampler = TangentialHugSampler(x0, self.B*self._get_δ(), self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method='linear', safe=True)
         self.ψ_generator = THUGSampler.generate_hug_integrator # again, this takes B, δ and returns an integrator (notice logpi doesn't matter)
-        self.ψ = self.ψ_generator(self.B, self.δ)
+        self.ψ = self.ψ_generator(self.B, self._get_δ())
         # Store when the switch happend
         self.n_switch = self.n  # store when the switch happens
         self.switched = True
@@ -266,6 +337,22 @@ class MSAdaptive:
         z0 = self.initializer()
         self.starting_particles = z0
         return z0
+
+    def _get_pm_target(self):
+        """Returns the correct pm target both if it is a float or a list."""
+        if isinstance(self.pm_target, float):
+            return self.pm_target
+        elif isinstance(self.pm_target, list):
+            if self.switched:
+                return self.pm_target[1]
+            else:
+                return self.pm_target[0]
+        else:
+            raise ValueError("pm target must be list or float, but found: ", type(self.pm_target))
+
+    def _resample(self, W):
+        """Returns resampled indeces."""
+        raise NotImplementedError("Resampling not implemented.")
 
     def sample(self):
         """Samples using the Markov Snippets algorithm."""
@@ -287,6 +374,10 @@ class MSAdaptive:
             self.εs.append(self.εmax)
             self.log_ηs.append(FilamentaryDistribution(self.manifold.generate_logηε, self.εmax))
             self.verboseprint("Setting initial epsilon to εmax = {:.16f}".format(self.εmax))
+        if self.initialization == 'manual':
+            # when using manual initialization we need to set the first epsilon to the one provided
+            # since εs = [ε0, ε1, ... εP] has size P+1, where P is the number of epochs.
+            pass
         # Keep running until stopping criterion is met
         # In this case we stop if we reach the number of maximum iterations, or
         # if out ε becomes smaller than εmin or if we move less than self.min_pm particles
@@ -294,6 +385,7 @@ class MSAdaptive:
         try:
             while self.check_stopping_criterion(): #(self.n <= self.maxiter) and (abs(self.εs[self.n-1]) >= self.εmin) and (self.PROP_MOVED[self.n-1] >= self.min_pm):
                 self.verboseprint("Iteration: ", self.n)
+                self.verboseprint("\tQuantile Value: ", self._get_quantile_value())
 
                 #### COMPUTE TRAJECTORIES
                 Z = apply_along_axis(self.ψ, 1, z)                                        # (N, B+1, 2d)
@@ -318,7 +410,7 @@ class MSAdaptive:
                 self.ESS.append(1 / np.sum(W**2))
 
                 #### RESAMPLING
-                resampling_indeces = choice(a=arange(self.N*(self.B+1)), size=self.N, p=W.flatten())
+                resampling_indeces = self._resample(W)
                 unravelled_indeces = unravel_index(resampling_indeces, (self.N, self.B+1))
                 self.K_RESAMPLED = vstack((self.K_RESAMPLED, unravelled_indeces[1]))
                 indeces = dstack(unravelled_indeces).squeeze()
@@ -327,7 +419,8 @@ class MSAdaptive:
 
                 #### REJUVENATE VELOCITIES
                 z[:, self.d:] = normal(loc=0.0, scale=1.0, size=(self.N, self.d))
-                self.ZN = vstack((self.ZN, z[None, ...]))
+                if not self.low_memory:
+                    self.ZN = vstack((self.ZN, z[None, ...]))
                 self.verboseprint("\tVelocities refreshed.")
 
                 #### ADAPT STEP SIZE
@@ -394,13 +487,15 @@ class SMCAdaptive:
         self.εprop_switch = SETTINGS['εprop_switch'] # When (ε_n - ε_{n-1}) / ε_n is less than self.εprop_switch, then we switch
         self.quantile_value = SETTINGS['quantile_value'] # Used to determine the next ϵ
         self.initialization = SETTINGS['initialization'] # type of initialization to use
+        self.mh_kernel_seed = SETTINGS['mh_kernel_seed'] # seed for the MH kernel
         self.switch_strategy = SETTINGS['switch_strategy'] # strategy used to determine when to switch RWM->THUG.
+        self.resampling_seed = SETTINGS['resampling_seed'] # seed for resampling
         self.stopping_criterion = SETTINGS['stopping_criterion'] # determines strategy used to terminate the algorithm
 
         # Check arguments types
         assert isinstance(self.N,  int), "N must be an integer."
         assert isinstance(self.B, int), "B must be an integer."
-        assert isinstance(self.δ, float), "δ must be a float."
+        assert isinstance(self.δ, float) or isinstance(self.δ, list), "δ must be a float or a list."
         assert isinstance(self.d, int), "d must be an integer."
         assert isinstance(self.δmin, float), "δmin must be float."
         assert isinstance(self.δmax, float), "δmax must be float."
@@ -413,31 +508,52 @@ class SMCAdaptive:
         assert isinstance(self.adaptiveε, bool), "adaptiveϵ must be bool."
         assert isinstance(self.adaptiveδ, bool), "adaptiveδ must be bool."
         assert isinstance(self.z0_manual, np.ndarray) or (self.z0_manual is None), "z0_manual must be a numpy array or None."
-        assert isinstance(self.pm_target, float), "pm_target must be float."
+        assert isinstance(self.pm_target, float) or isinstance(self.pm_target, list), "pm_target must be float or list."
         assert isinstance(self.pm_switch, float), "pm_switch must be float."
         assert isinstance(self.prior_seed, int), "prior_seed must be integer."
         assert isinstance(self.low_memory, bool), "low_memory must be bool."
         assert isinstance(self.integrator, str), "integrator must be a string."
         assert isinstance(self.εprop_switch, float), "εprop_switch must be a float."
         assert (self.ε0_manual is None) or isinstance(self.ε0_manual, float), "ε0_manual must be float or None."
-        assert isinstance(self.quantile_value, float), "quantile_value must be a float."
+        assert isinstance(self.quantile_value, float) or isinstance(self.quantile_value, list), "quantile_value must be a float or list."
         assert isinstance(self.initialization, str), "initialization must be a string."
+        assert isinstance(self.mh_kernel_seed, int), "mh_kernel_seed must be an integer."
         assert isinstance(self.switch_strategy, str), "switch_strategy must be a string."
+        assert isinstance(self.resampling_seed, int), "resampling_seed must be integer."
         assert isinstance(self.stopping_criterion, set), "stopping criterion must be a set."
 
         # Check argument values
-        assert self.δ > 0.0, "δ must be larger than 0."
+        if isinstance(self.δ, float):
+            assert self.δ > 0.0, "δ must be larger than 0."
+        elif isinstance(self.δ, list) and (self.integrator.lower() == 'rwm_then_thug') and (not self.adaptiveδ):
+            assert len(self.δ) == 2, "if δ is a list, must have length 2."
+            for δ in self.δ:
+                assert isinstance(δ, float) and δ > 0.0, "each δ in the list of δs must be a float and positive."
+        else:
+            raise ValueError("δ can only be a list when using rwm_then_thug integratora and adaptiveδ=False.")
         assert (self.εs_fixed is None) or all(x>y for x, y in zip(self.εs_fixed, self.εs_fixed[1:])), "εs must be a strictly decreasing list, or None."
         assert self.δmin > 0.0, "δmin must be larger than 0."
         assert self.δmin <= self.δmax, "δmin must be less than or equal to δmax."
         assert self.εmin > 0.0, "εmin must be larger than 0."
         assert (self.min_pm >= 0.0) and (self.min_pm <= 1.0), "min_pm must be in [0, 1]."
-        assert (self.pm_target >= 0) and (self.pm_target <= 1.0), "pm_target must be in [0, 1]."
-        assert (self.pm_switch >= 0) and (self.pm_switch <= 1.0), "pm_switch must be in [0, 1]."
+        if isinstance(self.pm_target, float):
+            assert (self.pm_target >= 0) and (self.pm_target <= 1.0), "pm_target must be in [0, 1]."
+        elif isinstance(self.pm_target, list) and (self.integrator.lower() != 'rwm_then_thug'):
+            raise ValueError("pm_target must be float if integrator is not rwm_then_thug.")
+        else: # is it a list and the integrator is rwm_then_thug
+            for pmt in self.pm_target:
+                assert (pmt >= 0) and (pmt <= 1.0), "each element in pm_target must be in [0, 1]."
         assert self.integrator.lower() in ['rwm', 'thug', 'rwm_then_thug'], "integrator must be one of 'RWM', 'THUG', or 'RWM_THEN_THUG'."
         assert (self.εprop_switch >= 0.0) and (self.εprop_switch <= 1.0), "εprop_switch must be in [0, 1]."
         assert (self.ε0_manual is None) or (self.ε0_manual >= 0.0), "ε0_manual must be larger than 0 or must be None."
-        assert (self.quantile_value >= 0) and (self.quantile_value <= 1.0), "quantile_value must be in [0, 1]."
+        if isinstance(self.quantile_value, float):
+            assert (self.quantile_value >= 0) and (self.quantile_value <= 1.0), "quantile_value must be in [0, 1]."
+        elif isinstance(self.quantile_value, list) and (self.integrator.lower() == 'rwm_then_thug'):
+            assert len(self.quantile_value) == 2, "When quantile_value is a list, it must have two elements."
+            for q in self.quantile_value:
+                assert isinstance(q, float), "each quantile_value must be a float."
+        else:
+            raise ValueError("quantile_value must be float, or can be a list of length 2 with 2 float only when the integrator is rwm_then_thug.")
         assert self.initialization in ['prior', 'manual'], "initialization must be one of 'prior' or 'manual'."
         assert self.switch_strategy in ['εprop', 'pm'], "switch_strategy must be one of 'εprop' or 'pm'."
         if isinstance(self.z0_manual, np.ndarray):
@@ -453,18 +569,22 @@ class SMCAdaptive:
         # Create functions and variables based on input arguments
         self.verboseprint = print if self.verbose else lambda *a, **k: None  # Prints only when verbose is true
         self.univariate = True if (self.manifold.get_codimension() == 1) else False # basically keeps track if it is uni or multi variate.
-        self.δs = [self.δ]
         self.switched = False
+        self.δs = [self._get_δ()]
+        self.resampling_rng = default_rng(seed=self.resampling_seed)
+        # Generate seeds for each particle
+        self.mh_rng   = default_rng(seed=self.mh_kernel_seed)
+        self.mh_seeds = [self.mh_rng.integers(low=1000, high=9999) for _ in range(self.N)]
 
         # Choose correct KERNEL to use
         if (self.integrator.lower() == 'rwm') or (self.integrator.lower() == 'rwm_then_thug'):
             # Choose Random Walk Metropolis kernel
             self.verboseprint("Stochastic Kernel: RWM.")
-            self.MH_kernel = lambda x, B, δ, log_ηε: RWM(x, B*δ, 1, log_ηε)[0].flatten()
+            self.MH_kernel = lambda x, B, δ, log_ηε, seed: RWM(x, B*δ, 1, log_ηε, seed=seed)[0].flatten()
         elif self.integrator.lower() == 'thug':
             self.verboseprint("Stochastic Kernel: THUG.")
             # Instantiate the class, doesn't matter which ξ0 or logpi we use.
-            self.THUGSampler = TangentialHugSampler(self.manifold.sample(advanced=True), self.B*self.δ, self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method='linear', safe=True)
+            self.THUGSampler = TangentialHugSampler(self.manifold.sample(advanced=True), self.B*self._get_δ(), self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method='linear', safe=True, seed=self.mh_kernel_seed)
             self.MH_kernel = self.THUGSampler.mh_kernel
         else:
             raise ValueError("Unexpected value found for stochastic kernel.")
@@ -527,6 +647,31 @@ class SMCAdaptive:
         self.check_stopping_criterion = lambda: self.check_iterations() and self.check_min_tolerance() and self.check_pm()
         self.verboseprint("Stopping criterion: ", stopping_criterion_string)
 
+    def _get_δ(self):
+        """Grabs δ. This is now needed because we are allowing self.δ to be a list of
+        two δs when using rwm_then_thug. For that reason, self.δ could be a list and so
+        whenever we call self.δ things would break. This function basically allows us to
+        use the correct δ."""
+        if isinstance(self.δ, list) and (not self.switched):
+            return self.δ[0]
+        elif isinstance(self.δ, list) and self.switched:
+            return self.δ[1]
+        elif isinstance(self.δ, float):
+            return self.δ
+        else:
+            raise ValueError("Something went wrong when grabbing δ.")
+
+    def _get_quantile_value(self):
+        """Grabs the quantile value in a similar way in which _get_δ() grabs δ."""
+        if isinstance(self.quantile_value, list) and (not self.switched):
+            return self.quantile_value[0]
+        elif isinstance(self.quantile_value, list) and self.switched:
+            return self.quantile_value[1]
+        elif isinstance(self.quantile_value, float):
+            return self.quantile_value
+        else:
+            raise ValueError("Couldnt get quantile value. ")
+
     def _compute_nth_tolerance(self, z):
         """If the εs schedule is fixed, this does nothing. However, if the schedule
         is adaptive (i.e. self.adaptiveε == True), then we compute it as a quantile
@@ -537,12 +682,20 @@ class SMCAdaptive:
             # compute distances
             distances = self.compute_distances(z) # SMC particles only include the position component
             # add distances to storage
-            self.DISTANCES = vstack((self.DISTANCES, distances))
+            self._compute_distances(distances)
             # determine next ε as quantile of distances
             # do not use clip because otherwise we will never finish
-            ε = min(self.εs[self.n-1], quantile(unique(distances), self.quantile_value))
+            ε = min(self.εs[self.n-1], quantile(unique(distances), self._get_quantile_value()))
             self.εs.append(ε)
             self.log_ηs.append(FilamentaryDistribution(self.manifold.generate_logηε, ε))
+
+    def _compute_distances(self, distances):
+        """Determines whether to overwrite or append distances based on low_memory
+        parameter."""
+        if self.low_memory:
+            self.DISTANCES = distances
+        else:
+            self.DISTANCES = vstack((self.DISTANCES, distances))
 
     def _compute_weights(self, z):
         """Computes weights for SMC sampler using log-sum-exp trick."""
@@ -563,19 +716,19 @@ class SMCAdaptive:
         we keep it the same. Here there is no need to change M because we construct
         it at each iteration anyways."""
         if self.adaptiveδ:
-            self.δ = clip(exp(log(self.δ) + 0.5*(self.APS[self.n] - self.pm_target)), self.δmin, self.δmax)
+            self.δ = clip(exp(log(self.δ) + 0.5*(self.APS[self.n] - self._get_pm_target())), self.δmin, self.δmax)
             self.δs.append(self.δ)
             self.verboseprint("\tStep-size adapted to: {:.16f}".format(self.δ))
         else:
-            self.δs.append(self.δ)
-            self.verboseprint("\tStep-size kept fixed at: {:.16f}".format(self.δ))
+            self.δs.append(self._get_δ())
+            self.verboseprint("\tStep-size kept fixed at: {:.16f}".format(self._get_δ()))
 
     def switch_kernel(self):
         """Switches from RWM to THUG kernels."""
         # the next 3 lines are taken verbatim from __init__ when integrator = 'THUG'
         # in the class initialization T, B, N, α, and logpi don't matter. Only thing that
         # matters is 'safe', 'fullJacobian', and 'method'.
-        THUGSampler = TangentialHugSampler(self.manifold.sample(advanced=True), self.B*self.δ, self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method='linear', safe=True)
+        THUGSampler = TangentialHugSampler(self.manifold.sample(advanced=True), self.B*self._get_δ(), self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method='linear', safe=True, seed=self.mh_kernel_seed)
         self.MH_kernel = THUGSampler.mh_kernel
         # Store when the switch happend
         self.n_switch = self.n  # store when the switch happens
@@ -592,6 +745,18 @@ class SMCAdaptive:
         self.starting_particles = z0
         return z0
 
+    def _get_pm_target(self):
+        """Returns the correct pm target both if it is a float or a list."""
+        if isinstance(self.pm_target, float):
+            return self.pm_target
+        elif isinstance(self.pm_target, list):
+            if self.switched:
+                return self.pm_target[1]
+            else:
+                return self.pm_target[0]
+        else:
+            raise ValueError("pm target must be list or float, but found: ", type(self.pm_target))
+
     def sample(self):
         """Samples using an SMC sampler.
         IMPORTANT: HERE THE PARTICLES CONSIST ONLY OF THE POSITIONS!!"""
@@ -607,7 +772,7 @@ class SMCAdaptive:
         self.DISTANCES = self.compute_distances(z)    # (N, )
         self.INDECES   = arange(self.N)               # (N, )
         self.APS       = [1.0]                        # Acceptance Probabilities
-        self.δs = [self.δ]                            # Step sizes
+        self.δs = [self._get_δ()]                     # Step sizes
 
         # If prior initialization, find εmax to start with
         if self.initialization == 'prior':
@@ -620,12 +785,13 @@ class SMCAdaptive:
         try:
             while self.check_stopping_criterion(): #(self.n <= self.maxiter) and (abs(self.εs[self.n-1]) >= self.εmin) and (self.APS[self.n-1] >= self.min_pm):
                 self.verboseprint("Iteration: ", self.n)
+                self.verboseprint("\tQuantile Value: ", self._get_quantile_value())
 
                 # RESAMPLE PARTICLES
                 if self.n == 1:
-                    indeces = choice(a=arange(self.N), size=self.N, p=self.WEIGHTS)
+                    indeces = self.resampling_rng.choice(a=arange(self.N), size=self.N, p=self.WEIGHTS)
                 else:
-                    indeces = choice(a=arange(self.N), size=self.N, p=self.WEIGHTS[self.n-1])
+                    indeces = self.resampling_rng.choice(a=arange(self.N), size=self.N, p=self.WEIGHTS[self.n-1])
                 self.INDECES = vstack((self.INDECES, indeces))
                 z = self.PARTICLES[self.n-1][indeces, :]
                 self.verboseprint("\tParticles resampled.")
@@ -641,12 +807,12 @@ class SMCAdaptive:
                 self.verboseprint("\tWeights computed and normalised.")
 
                 # MUTATION STEP (only propagate alive particles)
-                M = lambda z: self.MH_kernel(z, self.B, self.δ, self.log_ηs[self.n])
+                M = lambda z, ix: self.MH_kernel(z, self.B, self._get_δ(), self.log_ηs[self.n], self.mh_seeds[ix])
                 alive         = self.WEIGHTS[self.n] > 0.0
                 alive_indeces = where(alive)[0]
                 z_new         = deepcopy(z)
                 for ix in alive_indeces:
-                    z_new[ix] = M(z[ix])
+                    z_new[ix] = M(z[ix], ix)
                 self.verboseprint("\tMutation step done.")
 
                 # ESTIMATE ACCEPTANCE PROBABILITY
@@ -756,6 +922,37 @@ class SMCAdaptive:
 #     z0 = np.hstack((x0, v0))
 #     MS.starting_particles = z0
 #     return z0
+
+### SYSTEMATIC RESAMPLING (CHOPIN BOOK ON SMC)
+def inverse_cdf(su, W):
+    """Inverse CDF algorithm for a finite distribution.
+        Parameters
+        ----------
+        su: (M,) ndarray
+            M sorted uniform variates (i.e. M ordered points in [0,1]).
+        W: (N,) ndarray
+            a vector of N normalized weights (>=0 and sum to one)
+        Returns
+        -------
+        A: (M,) ndarray
+            a vector of M indices in range 0, ..., N-1
+    """
+    j = 0
+    s = W[0]
+    M = su.shape[0]
+    A = np.empty(M, dtype=np.int64)
+    for n in range(M):
+        while su[n] > s:
+            j += 1
+            s += W[j]
+        A[n] = j
+    return A
+
+def systematic(W, M):
+    """Systematic resampling.
+    """
+    su = (rand(1) + np.arange(M)) / M
+    return inverse_cdf(su, W)
 
 
 ### Filamentary Distribution objects

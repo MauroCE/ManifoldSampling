@@ -1,17 +1,20 @@
 import numpy as np
-from numpy import zeros, log, eye, vstack, arange, repeat, hstack 
-from numpy.random import rand
+from numpy import zeros, log, eye, vstack, arange, repeat, hstack
+from numpy.random import rand, default_rng, randint
 from scipy.stats import multivariate_normal as MVN
 
-def RWM(x0, s, N, logpi):
+def RWM(x0, s, N, logpi, seed=None):
     """Simple RWM function with proposal N(x, s*I)"""
+    if seed is None:
+        seed = randint(low=1000, high=9999)
+    rng = default_rng(seed=seed)
     samples = x = x0                                   # Accepted samples will be stored here
     acceptances, logpx, d = zeros(N), logpi(x), len(x) # Accepted (=1), log(pi(x)), dimensionality
-    logu = log(rand(N))                                # Used for Accept/Reject step
-    q = MVN(zeros(d), s * eye(d))                      # Proposal distribution is MVN with s * I covariance matrix.
+    logu = log(rng.uniform(size=N))                                # Used for Accept/Reject step
+    # q = MVN(zeros(d), s * eye(d))                      # Proposal distribution is MVN with s * I covariance matrix.
 
     for i in range(N):
-        y = x + q.rvs()                # Sample candidate
+        y = x + rng.normal(loc=0.0, scale=s, size=d)#q.rvs()                # Sample candidate
         logpy = logpi(y)               # Compute its log density
         if logu[i] <= logpy - logpx:
             x, logpx, acceptances[i] = y, logpy, 1 # Accept!
