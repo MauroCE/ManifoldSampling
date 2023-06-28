@@ -490,6 +490,7 @@ class SMCAdaptive:
         self.mh_kernel_seed = SETTINGS['mh_kernel_seed'] # seed for the MH kernel
         self.switch_strategy = SETTINGS['switch_strategy'] # strategy used to determine when to switch RWM->THUG.
         self.resampling_seed = SETTINGS['resampling_seed'] # seed for resampling
+        self.resampling_scheme = SETTINGS['resampling_scheme'] # resampling scheme to use
         self.stopping_criterion = SETTINGS['stopping_criterion'] # determines strategy used to terminate the algorithm
 
         # Check arguments types
@@ -520,6 +521,7 @@ class SMCAdaptive:
         assert isinstance(self.mh_kernel_seed, int), "mh_kernel_seed must be an integer."
         assert isinstance(self.switch_strategy, str), "switch_strategy must be a string."
         assert isinstance(self.resampling_seed, int), "resampling_seed must be integer."
+        assert isinstance(self.resampling_scheme, str), "resampling_scheme must be a string."
         assert isinstance(self.stopping_criterion, set), "stopping criterion must be a set."
 
         # Check argument values
@@ -563,6 +565,7 @@ class SMCAdaptive:
             # Create a new variable, unique to SMC samplers, that stores the initial positions
             self.x0_manual = self.z0_manual[:, :self.d]
         assert self.stopping_criterion.issubset({'maxiter', 'εmin', 'pm'}), "stopping criterion must be a subset of maxiter, εmin and pm."
+        assert self.resampling_scheme in ['multinomial', 'systematic'], "resampling scheme must be one of multinomial or resampling."
         assert len(self.stopping_criterion) >= 1, "There must be at least one stopping criterion."
 
 
@@ -646,6 +649,17 @@ class SMCAdaptive:
             self.check_pm = lambda: True
         self.check_stopping_criterion = lambda: self.check_iterations() and self.check_min_tolerance() and self.check_pm()
         self.verboseprint("Stopping criterion: ", stopping_criterion_string)
+
+        # Choose resampling scheme
+        if self.resampling_scheme == 'multinomial':
+            resample = lambda W: self.resampling_rng.choice(a=arange(self.N), size=self.N, p=W.flatten())
+            self.verboseprint("Resampling: MULTINOMIAL.")
+        elif self.resampling_scheme == 'systematic':
+            resample = lambda W: systematic(W.flatten(), self.N)
+            self.verboseprint("Resampling: SYSTEMATIC.")
+        else:
+            raise ValueError("Resampling scheme must be either multinomial or systematic.")
+        self._resample = resample
 
     def _get_δ(self):
         """Grabs δ. This is now needed because we are allowing self.δ to be a list of
@@ -757,6 +771,10 @@ class SMCAdaptive:
         else:
             raise ValueError("pm target must be list or float, but found: ", type(self.pm_target))
 
+    def _resample(self, W):
+        """Returns resampled indeces."""
+        raise NotImplementedError("Resampling not implemented.")
+
     def sample(self):
         """Samples using an SMC sampler.
         IMPORTANT: HERE THE PARTICLES CONSIST ONLY OF THE POSITIONS!!"""
@@ -789,9 +807,11 @@ class SMCAdaptive:
 
                 # RESAMPLE PARTICLES
                 if self.n == 1:
-                    indeces = self.resampling_rng.choice(a=arange(self.N), size=self.N, p=self.WEIGHTS)
+                    indeces = self._resample(self.WEIGHTS)
+                    #self.resampling_rng.choice(a=arange(self.N), size=self.N, p=self.WEIGHTS)
                 else:
-                    indeces = self.resampling_rng.choice(a=arange(self.N), size=self.N, p=self.WEIGHTS[self.n-1])
+                    indeces = self._resample(self.WEIGHTS[self.n-1])
+                    #self.resampling_rng.choice(a=arange(self.N), size=self.N, p=self.WEIGHTS[self.n-1])
                 self.INDECES = vstack((self.INDECES, indeces))
                 z = self.PARTICLES[self.n-1][indeces, :]
                 self.verboseprint("\tParticles resampled.")
