@@ -170,10 +170,10 @@ class TangentialHugSampler:
                 x = x + δ*v/2
                 trajectory[b+1, :] = hstack((x, v))
             # finally generate one extra point using the normal hug
-            x = x + δ*v/2 
+            x = x + δ*v/2
             v = - v + 2 * self.project(v, self.jacobian(x))
             x = x + δ*v/2
-            trajectory[-1] = x
+            trajectory[-1, :] = hstack((x, v))
             # Unsqueeze
             return trajectory
         return ψ
