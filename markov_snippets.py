@@ -125,7 +125,7 @@ class MSAdaptive:
             for pmt in self.pm_target:
                 assert (pmt >= 0) and (pmt <= 1.0), "each element in pm_target must be in [0, 1]."
         assert (self.pm_switch >= 0) and (self.pm_switch <= 1.0), "pm_switch must be in [0, 1]."
-        assert self.integrator.lower() in ['rwm', 'thug', 'rwm_then_thug'], "integrator must be one of 'RWM', 'THUG', or 'RWM_THEN_THUG'."
+        assert self.integrator.lower() in ['rwm', 'thug', 'rwm_then_thug', 'hug_and_nhug'], "integrator must be one of 'RWM', 'THUG', 'RWM_THEN_THUG' or 'HUG_AND_HUG'."
         assert (self.εprop_switch >= 0.0) and (self.εprop_switch <= 1.0), "εprop_switch must be in [0, 1]."
         assert (self.ε0_manual is None) or (self.ε0_manual >= 0.0), "ε0_manual must be larger than 0 or must be None."
         if isinstance(self.quantile_value, float):
@@ -163,6 +163,12 @@ class MSAdaptive:
             # Instantiate the class, doesn't matter which ξ0 or logpi we use.
             THUGSampler = TangentialHugSampler(self.manifold.sample(advanced=True), self.B*self._get_δ(), self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method='linear', safe=True)
             self.ψ_generator = THUGSampler.generate_hug_integrator # again, this takes B, δ and returns an integrator (notice logpi doesn't matter)
+            self.ψ = self.ψ_generator(self.B, self._get_δ())
+        elif self.integrator.lower() == 'thug_and_nhug':
+            self.verboseprint("Integrator: HUG + NHUG.")
+            # Instantiate the class, doesn't matter which ξ0 or logpi we use.
+            THUGSampler = TangentialHugSampler(self.manifold.sample(advanced=True), self.B*self._get_δ(), self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method='linear', safe=True)
+            self.ψ_generator = THUGSampler.generate_hug_and_nhug_integrator # again, this takes B, δ and returns an integrator (notice logpi doesn't matter)
             self.ψ = self.ψ_generator(self.B, self._get_δ())
         else:
             raise ValueError("Unexpected value found for integrator.")

@@ -152,6 +152,32 @@ class TangentialHugSampler:
             return trajectory
         return ψ
 
+    def generate_hug_and_nhug_integrator(self, B, δ):
+        """This integrator is the same as the hug integrator, except at the
+        end of the trajectory it generates an extra point using normal-hug.
+        Notice, importantly, that we use B as before. Meaning overall the
+        trajectory will have length B+1 and so actually z_0, ... z_{B-1}
+        will be generated with Hug, whereas z_B will be generated with nhug."""
+        def ψ(z0):
+            trajectory = zeros((B+1, len(z0)))
+            x0, v0 = z0[:self.d], z0[self.d:]
+            v, x = v0, x0
+            trajectory[0, :] = z0
+            # generate B points using Hug integrator
+            for b in range(B-1):
+                x = x + δ*v/2
+                v = v - 2 * self.project(v, self.jacobian(x))
+                x = x + δ*v/2
+                trajectory[b+1, :] = hstack((x, v))
+            # finally generate one extra point using the normal hug
+            x = x + δ*v/2 
+            v = - v + 2 * self.project(v, self.jacobian(x))
+            x = x + δ*v/2
+            trajectory[-1] = x
+            # Unsqueeze
+            return trajectory
+        return ψ
+
     def mh_kernel(self, x0, B, δ, logpi, seed = None, α=0.0):
         """Works well for SMC samplers. This is basically to allow for different
         B, δ or logpi at each stage of SMC, while using the same q, the same
