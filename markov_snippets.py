@@ -164,7 +164,7 @@ class MSAdaptive:
             THUGSampler = TangentialHugSampler(self.manifold.sample(advanced=True), self.B*self._get_δ(), self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method='linear', safe=True)
             self.ψ_generator = THUGSampler.generate_hug_integrator # again, this takes B, δ and returns an integrator (notice logpi doesn't matter)
             self.ψ = self.ψ_generator(self.B, self._get_δ())
-        elif self.integrator.lower() == 'thug_and_nhug':
+        elif self.integrator.lower() == 'hug_and_nhug':
             self.verboseprint("Integrator: HUG + NHUG.")
             # Instantiate the class, doesn't matter which ξ0 or logpi we use.
             THUGSampler = TangentialHugSampler(self.manifold.sample(advanced=True), self.B*self._get_δ(), self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method='linear', safe=True)
