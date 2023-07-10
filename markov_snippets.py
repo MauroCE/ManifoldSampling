@@ -54,6 +54,7 @@ class MSAdaptive:
         self.min_pm = SETTINGS['min_pm'] # if fewer resampled particles have k ≧ 1 than self.min_pm we stop the algorithm (pm stands for prop-moved)
         self.maxiter = SETTINGS['maxiter'] # MS stopped when n ≧ maxiter
         self.verbose = SETTINGS['verbose'] # Whether to print MS progress
+        self.prop_hug = SETTINGS['prop_hug'] # when using hug_and_nhug, proportion of trajectory generated with hug
         self.εs_fixed = SETTINGS['εs_fixed']   # Sequence of tolerances, this is only used if adaptiveϵ is False
         self.manifold = SETTINGS['manifold'] # Manifold around which we sample
         self.ε0_manual = SETTINGS['ε0_manual'] # When initialization is 'manual' then this is the ϵ0 that we assume it has been sampled from
@@ -73,6 +74,7 @@ class MSAdaptive:
         self.resampling_scheme = SETTINGS['resampling_scheme'] # resampling scheme to use
         self.stopping_criterion = SETTINGS['stopping_criterion'] # determines strategy used to terminate the algorithm
 
+
         # Check arguments types
         assert isinstance(self.N,  int), "N must be an integer."
         assert isinstance(self.B, int), "B must be an integer."
@@ -84,6 +86,7 @@ class MSAdaptive:
         assert isinstance(self.min_pm, float), "min_pm must be float."
         assert isinstance(self.maxiter, int), "maxiter must be integer."
         assert isinstance(self.verbose, bool), "verbose must be boolean."
+        assert isinstance(self.prop_hug, float), "prop_hug must be float."
         assert isinstance(self.εs_fixed, np.ndarray) or (self.εs_fixed is None), "εs must be a numpy array or must be None."
         assert isinstance(self.manifold, Manifold), "manifold must be an instance of class Manifold."
         assert isinstance(self.adaptiveε, bool), "adaptiveϵ must be bool."
@@ -113,6 +116,7 @@ class MSAdaptive:
         else:
             raise ValueError("δ can only be a list when using rwm_then_thug integratora and adaptiveδ=False.")
         assert (self.εs_fixed is None) or all(x>y for x, y in zip(self.εs_fixed, self.εs_fixed[1:])), "εs must be a strictly decreasing list, or None."
+        assert (self.prop_hug >=0) and (self.prop_hug <= 1.0), "prop_hug must be in [0, 1]."
         assert self.δmin > 0.0, "δmin must be larger than 0."
         assert self.δmin <= self.δmax, "δmin must be less than or equal to δmax."
         assert self.εmin > 0.0, "εmin must be larger than 0."
@@ -168,7 +172,7 @@ class MSAdaptive:
             self.verboseprint("Integrator: HUG + NHUG.")
             # Instantiate the class, doesn't matter which ξ0 or logpi we use.
             THUGSampler = TangentialHugSampler(self.manifold.sample(advanced=True), self.B*self._get_δ(), self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method='linear', safe=True)
-            self.ψ_generator = THUGSampler.generate_hug_and_nhug_integrator # again, this takes B, δ and returns an integrator (notice logpi doesn't matter)
+            self.ψ_generator = lambda B, δ: THUGSampler.generate_hug_and_nhug_integrator(B, δ, prop_hug=self.prop_hug) # again, this takes B, δ and returns an integrator (notice logpi doesn't matter)
             self.ψ = self.ψ_generator(self.B, self._get_δ())
         else:
             raise ValueError("Unexpected value found for integrator.")
