@@ -109,12 +109,12 @@ class MSAdaptive:
         # Check argument values
         if isinstance(self.δ, float):
             assert self.δ > 0.0, "δ must be larger than 0."
-        elif isinstance(self.δ, list) and (self.integrator.lower() == 'rwm_then_thug') and (not self.adaptiveδ):
+        elif isinstance(self.δ, list) and (self.integrator.lower() in ['rwm_then_thug', 'rwm_then_han']) and (not self.adaptiveδ):
             assert len(self.δ) == 2, "if δ is a list, must have length 2."
             for δ in self.δ:
                 assert isinstance(δ, float) and δ > 0.0, "each δ in the list of δs must be a float and positive."
         else:
-            raise ValueError("δ can only be a list when using rwm_then_thug integratora and adaptiveδ=False.")
+            raise ValueError("δ can only be a list when using rwm_then_thug or rwm_then_han integrator and adaptiveδ=False.")
         assert (self.εs_fixed is None) or all(x>y for x, y in zip(self.εs_fixed, self.εs_fixed[1:])), "εs must be a strictly decreasing list, or None."
         assert (self.prop_hug >=0) and (self.prop_hug <= 1.0), "prop_hug must be in [0, 1]."
         assert self.δmin > 0.0, "δmin must be larger than 0."
@@ -123,23 +123,23 @@ class MSAdaptive:
         assert (self.min_pm >= 0.0) and (self.min_pm <= 1.0), "min_pm must be in [0, 1]."
         if isinstance(self.pm_target, float):
             assert (self.pm_target >= 0) and (self.pm_target <= 1.0), "pm_target must be in [0, 1]."
-        elif isinstance(self.pm_target, list) and (self.integrator.lower() != 'rwm_then_thug'):
-            raise ValueError("pm_target must be float if integrator is not rwm_then_thug.")
+        elif isinstance(self.pm_target, list) and (self.integrator.lower() not in ['rwm_then_thug', 'rwm_then_han']):
+            raise ValueError("pm_target must be float if integrator is not rwm_then_thug or rwm_then_han.")
         else: # is it a list and the integrator is rwm_then_thug
             for pmt in self.pm_target:
                 assert (pmt >= 0) and (pmt <= 1.0), "each element in pm_target must be in [0, 1]."
         assert (self.pm_switch >= 0) and (self.pm_switch <= 1.0), "pm_switch must be in [0, 1]."
-        assert self.integrator.lower() in ['rwm', 'thug', 'rwm_then_thug', 'hug_and_nhug'], "integrator must be one of 'RWM', 'THUG', 'RWM_THEN_THUG' or 'HUG_AND_HUG'."
+        assert self.integrator.lower() in ['rwm', 'thug', 'rwm_then_thug', 'hug_and_nhug', 'rwm_then_han'], "integrator must be one of 'RWM', 'THUG', 'RWM_THEN_THUG', 'HUG_AND_HUG', or 'RWM_THEN_HAN'."
         assert (self.εprop_switch >= 0.0) and (self.εprop_switch <= 1.0), "εprop_switch must be in [0, 1]."
         assert (self.ε0_manual is None) or (self.ε0_manual >= 0.0), "ε0_manual must be larger than 0 or must be None."
         if isinstance(self.quantile_value, float):
             assert (self.quantile_value >= 0) and (self.quantile_value <= 1.0), "quantile_value must be in [0, 1]."
-        elif isinstance(self.quantile_value, list) and (self.integrator.lower() == 'rwm_then_thug'):
+        elif isinstance(self.quantile_value, list) and (self.integrator.lower() in ['rwm_then_thug', 'rwm_then_han']):
             assert len(self.quantile_value) == 2, "When quantile_value is a list, it must have two elements."
             for q in self.quantile_value:
                 assert isinstance(q, float), "each quantile_value must be a float."
         else:
-            raise ValueError("quantile_value must be float, or can be a list of length 2 with 2 float only when the integrator is rwm_then_thug.")
+            raise ValueError("quantile_value must be float, or can be a list of length 2 with 2 float only when the integrator is rwm_then_thug or rwm_then_han.")
         assert self.initialization in ['prior', 'manual'], "initialization must be one of 'prior' or 'manual'."
         assert self.switch_strategy in ['εprop', 'pm'], "switch_strategy must be one of 'εprop' or 'pm'."
         if isinstance(self.z0_manual, np.ndarray):
@@ -157,7 +157,7 @@ class MSAdaptive:
         self.resampling_rng = default_rng(seed=self.resampling_seed)
 
         # Choose correct integrator to use
-        if (self.integrator.lower() == 'rwm') or (self.integrator.lower() == 'rwm_then_thug'):
+        if (self.integrator.lower() == 'rwm') or (self.integrator.lower() == 'rwm_then_thug') or (self.integrator.lower() == 'rwm_then_han'):
             # Choose Random Walk Metropolis integrator
             self.verboseprint("Integrator: RWM.")
             self.ψ_generator = lambda B, δ: generate_RWMIntegrator(B, δ) # This is now a function that given B, δ it returns a function that integrates with those parameters
@@ -215,7 +215,7 @@ class MSAdaptive:
             self.compute_distances = self._compute_distances_multivariate
 
         # Determine whether to switch RWM -> THUG or not
-        if self.integrator.lower() == 'rwm_then_thug':
+        if (self.integrator.lower() == 'rwm_then_thug') or (self.integrator.lower() == 'rwm_then_han'):
             self.switch = True
         else:
             self.switch = False
@@ -329,19 +329,27 @@ class MSAdaptive:
             self.verboseprint("\tStep-size kept fixed at: {:.16f}".format(self._get_δ()))
 
     def switch_integrator(self):
-        """Switches from RWM to THUG."""
+        """Switches from RWM to THUG, or from RWM to HAN."""
         # the next 3 lines are taken verbatim from __init__ when integrator = 'THUG'
         x0 = self.manifold.sample(advanced=True)
         self.sampled_x0 = x0
         THUGSampler = TangentialHugSampler(x0, self.B*self._get_δ(), self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method='linear', safe=True)
-        self.ψ_generator = THUGSampler.generate_hug_integrator # again, this takes B, δ and returns an integrator (notice logpi doesn't matter)
+        if self.integrator.lower() == 'rwm_then_thug':
+            self.ψ_generator = THUGSampler.generate_hug_integrator # again, this takes B, δ and returns an integrator (notice logpi doesn't matter)
+        elif self.integrator.lower() == 'rwm_then_han':
+            self.ψ_generator = lambda B, δ: THUGSampler.generate_hug_and_nhug_integrator(B, δ, prop_hug=self.prop_hug)
+        else:
+            raise NotImplementedError("Attempted switching integrator even though it is neither rwm_then_thug nor rwm_then_han.")
         self.ψ = self.ψ_generator(self.B, self._get_δ())
         # Store when the switch happend
         self.n_switch = self.n  # store when the switch happens
         self.switched = True
         self.verboseprint("\n")
         self.verboseprint("####################################")
-        self.verboseprint("### SWITCHING TO THUG INTEGRATOR ###")
+        if self.integrator.lower() == 'rwm_then_thug':
+            self.verboseprint("### SWITCHING TO THUG INTEGRATOR ###")
+        else:
+            self.verboseprint("### SWITCHING TO HAN INTEGRATOR ###")
         self.verboseprint("####################################")
         self.verboseprint("\n")
 
@@ -444,7 +452,7 @@ class MSAdaptive:
                 self._update_δ_and_ψ()
 
                 #### CHECK IF IT'S TIME TO SWITCH INTEGRATOR
-                if self.integrator.lower() == 'rwm_then_thug':  # only happens when we allow switching
+                if (self.integrator.lower() == 'rwm_then_thug') or (self.integrator.lower() == 'rwm_then_han'):  # only happens when we allow switching
                     if not self.switched:                       # continue ahead only if we haven't already switched
                         if self.switch_strategy == 'εprop':
                             if self.n >= 2:
@@ -459,6 +467,7 @@ class MSAdaptive:
             self.total_time = time() - start_time
         except (ValueError, KeyboardInterrupt) as e:
             print("ValueError was raised: ", e)
+            return z
         return z
 
 ##### SINGLE SMC CLASS: MULTI AND UNI VARIATE, ADAPTS BOTH TOLERANCES AND DELTA
@@ -540,7 +549,7 @@ class SMCAdaptive:
         # Check argument values
         if isinstance(self.δ, float):
             assert self.δ > 0.0, "δ must be larger than 0."
-        elif isinstance(self.δ, list) and (self.integrator.lower() == 'rwm_then_thug') and (not self.adaptiveδ):
+        elif isinstance(self.δ, list) and (self.integrator.lower() in 'rwm_then_thug') and (not self.adaptiveδ):
             assert len(self.δ) == 2, "if δ is a list, must have length 2."
             for δ in self.δ:
                 assert isinstance(δ, float) and δ > 0.0, "each δ in the list of δs must be a float and positive."

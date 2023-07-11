@@ -432,3 +432,22 @@ def lighten_color(color, amount=0.5):
         c = color
     c = colorsys.rgb_to_hls(*mc.to_rgb(c))
     return colorsys.hls_to_rgb(c[0], 1 - amount * (1 - c[1]), c[2])
+
+
+def adagrad(function, gradient, initial_point, learning_rate=0.05, tolerance=1e-8, max_iter=10000):
+    """Performs AdaGrad, an adaptive gradient descent optimization strategy to
+    minimize the function `function` with gradient `gradient`, using a learning
+    rate `learning_rate`, a tolerance `tolerance` and a maximum number of iterations 
+    `max_iter`, starting from `initial_point`."""
+    x = np.array(initial_point)
+    grad_squared_sum = np.zeros_like(x)
+
+    for _ in range(max_iter):
+        grad = gradient(x)
+        grad_squared_sum += grad**2
+        x -= (learning_rate / (np.sqrt(grad_squared_sum) + tolerance)) * grad
+
+        if np.linalg.norm(grad) < tolerance:
+            break
+
+    return x
