@@ -72,6 +72,7 @@ class MSAdaptive:
         self.switch_strategy = SETTINGS['switch_strategy'] # strategy used to determine when to switch RWM->THUG.
         self.resampling_seed = SETTINGS['resampling_seed'] # seed for resampling
         self.resampling_scheme = SETTINGS['resampling_scheme'] # resampling scheme to use
+        self.projection_method = SETTINGS['projection_method'] # method used in THUG to project ('linear' or 'qr')
         self.stopping_criterion = SETTINGS['stopping_criterion'] # determines strategy used to terminate the algorithm
 
 
@@ -104,6 +105,7 @@ class MSAdaptive:
         assert isinstance(self.switch_strategy, str), "switch_strategy must be a string."
         assert isinstance(self.resampling_seed, int), "resampling seed must be integer."
         assert isinstance(self.resampling_scheme, str), "resampling_scheme must be a string."
+        assert isinstance(self.projection_method, str), "projection_method must be a string."
         assert isinstance(self.stopping_criterion, set), "stopping criterion must be a set."
 
         # Check argument values
@@ -147,6 +149,7 @@ class MSAdaptive:
                 raise ValueError("z0_manual must have shape (N, 2d).")
         assert self.stopping_criterion.issubset({'maxiter', 'εmin', 'pm'}), "stopping criterion must be a subset of maxiter, εmin and pm."
         assert self.resampling_scheme in ['multinomial', 'systematic'], "resampling scheme must be one of multinomial or resampling."
+        assert self.projection_method in ['linear', 'qr']
         assert len(self.stopping_criterion) >= 1, "There must be at least one stopping criterion."
 
         # Create functions and variables based on input arguments
@@ -165,14 +168,14 @@ class MSAdaptive:
         elif self.integrator.lower() == 'thug':
             self.verboseprint("Integrator: THUG.")
             # Instantiate the class, doesn't matter which ξ0 or logpi we use.
-            THUGSampler = TangentialHugSampler(self.manifold.sample(advanced=True), self.B*self._get_δ(), self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method='linear', safe=True)
+            THUGSampler = TangentialHugSampler(self.manifold.sample(advanced=True), self.B*self._get_δ(), self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method=self.projection_method, safe=True)
             self.ψ_generator = THUGSampler.generate_hug_integrator # again, this takes B, δ and returns an integrator (notice logpi doesn't matter)
             self.ψ = self.ψ_generator(self.B, self._get_δ())
         elif self.integrator.lower() == 'hug_and_nhug':
             self.verboseprint("Integrator: HUG + NHUG.")
             self.verboseprint("Prop Hug  : ", self.prop_hug)
             # Instantiate the class, doesn't matter which ξ0 or logpi we use.
-            THUGSampler = TangentialHugSampler(self.manifold.sample(advanced=True), self.B*self._get_δ(), self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method='linear', safe=True)
+            THUGSampler = TangentialHugSampler(self.manifold.sample(advanced=True), self.B*self._get_δ(), self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method=self.projection_method, safe=True)
             self.ψ_generator = lambda B, δ: THUGSampler.generate_hug_and_nhug_integrator(B, δ, prop_hug=self.prop_hug) # again, this takes B, δ and returns an integrator (notice logpi doesn't matter)
             self.ψ = self.ψ_generator(self.B, self._get_δ())
         else:
@@ -333,7 +336,7 @@ class MSAdaptive:
         # the next 3 lines are taken verbatim from __init__ when integrator = 'THUG'
         x0 = self.manifold.sample(advanced=True)
         self.sampled_x0 = x0
-        THUGSampler = TangentialHugSampler(x0, self.B*self._get_δ(), self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method='linear', safe=True)
+        THUGSampler = TangentialHugSampler(x0, self.B*self._get_δ(), self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method=self.projection_method, safe=True)
         if self.integrator.lower() == 'rwm_then_thug':
             self.ψ_generator = THUGSampler.generate_hug_integrator # again, this takes B, δ and returns an integrator (notice logpi doesn't matter)
         elif self.integrator.lower() == 'rwm_then_han':
