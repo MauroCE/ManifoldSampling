@@ -135,10 +135,10 @@ class TangentialHugSampler:
         v = v + (self.α / (1 - self.α)) * self.project(v, self.jacobian(x))
         return np.concatenate((x, v))
 
-    def generate_hug_integrator(self, B, δ, α=0.0):
+    def generate_hug_integrator(self, B, δ, metropolised=False, α=0.0):
         """Generates an integrator function ψ with α=0.0 fixed. This works well for Markov Snippets.
         Remember that this outputs a whole trajectory."""
-        def ψ(z0):
+        def ψ(z0, metropolised=metropolised):
             trajectory = zeros((B+1, len(z0)))
             x0, v0 = z0[:self.d], z0[self.d:]
             v, x = v0, x0
@@ -149,10 +149,13 @@ class TangentialHugSampler:
                 x = x + δ*v/2
                 trajectory[b+1, :] = hstack((x, v))
             # Unsqueeze
-            return trajectory
-        return ψ
+            if not metropolised:
+                return trajectory
+            else:
+                return trajectory[[0, -1], :]
+        return lambda z: ψ(z, metropolised=metropolised)
 
-    def generate_hug_and_nhug_integrator(self, B, δ, prop_hug=0.5):
+    def generate_hug_and_nhug_integrator(self, B, δ, prop_hug=0.5, metropolised=False):
         """This integrator first performs int(prop_hug*B) Hug integration steps
         and then performs B - int(prop_hug*B) Nhug steps from the final Hug point.
         The idea is to have a split between tangential and normal moves, which
@@ -161,7 +164,7 @@ class TangentialHugSampler:
         trajectory will have length B+1."""
         assert isinstance(prop_hug, float), "prop_hug must be a float."
         assert (prop_hug >= 0.0) and (prop_hug <= 1.0), "prop_hug must be in [0, 1]."
-        def ψ(z0):
+        def ψ(z0, metropolised=metropolised):
             trajectory = zeros((B+1, len(z0)))
             x0, v0 = z0[:self.d], z0[self.d:]
             v, x = v0, x0
@@ -178,8 +181,11 @@ class TangentialHugSampler:
                 x = x + δ*v/2
                 trajectory[b+1, :] = hstack((x, v))
             # Unsqueeze
-            return trajectory
-        return ψ
+            if not metropolised:
+                return trajectory
+            else:
+                return trajectory[[0, -1], :]
+        return lambda z: ψ(z, metropolised=metropolised)
 
     def mh_kernel(self, x0, B, δ, logpi, seed = None, α=0.0):
         """Works well for SMC samplers. This is basically to allow for different

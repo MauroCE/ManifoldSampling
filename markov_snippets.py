@@ -67,6 +67,7 @@ class MSAdaptive:
         self.low_memory = SETTINGS['low_memory'] # whether to use a low-memory version or not. Low memory does not store ZNK
         self.integrator = SETTINGS['integrator'] # Determines if we use RWM, THUG or start with RWM and switch to THUG
         self.εprop_switch = SETTINGS['εprop_switch'] # When (ε_n - ε_{n-1}) / ε_n is less than self.εprop_switch, then we switch
+        self.metropolised = SETTINGS['metropolised'] # whether to keep whole trajectory (False) or only start and end (True)
         self.quantile_value = SETTINGS['quantile_value'] # Used to determine the next ϵ
         self.initialization = SETTINGS['initialization'] # type of initialization to use
         self.switch_strategy = SETTINGS['switch_strategy'] # strategy used to determine when to switch RWM->THUG.
@@ -74,7 +75,6 @@ class MSAdaptive:
         self.resampling_scheme = SETTINGS['resampling_scheme'] # resampling scheme to use
         self.projection_method = SETTINGS['projection_method'] # method used in THUG to project ('linear' or 'qr')
         self.stopping_criterion = SETTINGS['stopping_criterion'] # determines strategy used to terminate the algorithm
-
 
         # Check arguments types
         assert isinstance(self.N,  int), "N must be an integer."
@@ -99,6 +99,7 @@ class MSAdaptive:
         assert isinstance(self.low_memory, bool), "low_memory must be bool."
         assert isinstance(self.integrator, str), "integrator must be a string."
         assert isinstance(self.εprop_switch, float), "εprop_switch must be a float."
+        assert isinstance(self.metropolised, bool), "metropolised must be bool."
         assert (self.ε0_manual is None) or isinstance(self.ε0_manual, float), "ε0_manual must be float or None."
         assert isinstance(self.quantile_value, float) or isinstance(self.quantile_value, list), "quantile_value must be a float or list."
         assert isinstance(self.initialization, str), "initialization must be a string."
@@ -107,6 +108,7 @@ class MSAdaptive:
         assert isinstance(self.resampling_scheme, str), "resampling_scheme must be a string."
         assert isinstance(self.projection_method, str), "projection_method must be a string."
         assert isinstance(self.stopping_criterion, set), "stopping criterion must be a set."
+
 
         # Check argument values
         if isinstance(self.δ, float):
@@ -131,7 +133,7 @@ class MSAdaptive:
             for pmt in self.pm_target:
                 assert (pmt >= 0) and (pmt <= 1.0), "each element in pm_target must be in [0, 1]."
         assert (self.pm_switch >= 0) and (self.pm_switch <= 1.0), "pm_switch must be in [0, 1]."
-        assert self.integrator.lower() in ['rwm', 'thug', 'rwm_then_thug', 'hug_and_nhug', 'rwm_then_han'], "integrator must be one of 'RWM', 'THUG', 'RWM_THEN_THUG', 'HUG_AND_HUG', or 'RWM_THEN_HAN'."
+        assert self.integrator.lower() in ['rwm', 'thug', 'rwm_then_thug', 'hug_and_nhug', 'rwm_then_han'], "integrator must be one of 'RWM', 'THUG', 'RWM_THEN_THUG', 'HUG_AND_HUG', 'RWM_THEN_HAN', 'RWM_KERNEL'."
         assert (self.εprop_switch >= 0.0) and (self.εprop_switch <= 1.0), "εprop_switch must be in [0, 1]."
         assert (self.ε0_manual is None) or (self.ε0_manual >= 0.0), "ε0_manual must be larger than 0 or must be None."
         if isinstance(self.quantile_value, float):
@@ -158,26 +160,49 @@ class MSAdaptive:
         self.switched = False
         self.δs = [self._get_δ()]
         self.resampling_rng = default_rng(seed=self.resampling_seed)
+        # Create a new variable B_size. This is to determine the sizes of arrays. basically
+        # basically the idea is that this would be different whether it is METROPOLISED or not.
+        # this variable would not be affected by later versions of the program that adapt B.
+        self.Bsize = self.B if not self.metropolised else 1
 
         # Choose correct integrator to use
         if (self.integrator.lower() == 'rwm') or (self.integrator.lower() == 'rwm_then_thug') or (self.integrator.lower() == 'rwm_then_han'):
-            # Choose Random Walk Metropolis integrator
-            self.verboseprint("Integrator: RWM.")
-            self.ψ_generator = lambda B, δ: generate_RWMIntegrator(B, δ) # This is now a function that given B, δ it returns a function that integrates with those parameters
-            self.ψ = self.ψ_generator(self.B, self._get_δ())
+            if not self.metropolised:
+                # Choose Random Walk Metropolis integrator
+                self.verboseprint("Integrator: RWM.")
+                self.ψ_generator = lambda B, δ: generate_RWMIntegrator(B, δ) # This is now a function that given B, δ it returns a function that integrates with those parameters
+                self.ψ = self.ψ_generator(self.B, self._get_δ())
+            else:
+                # When metropolised, I just output the final point instead
+                self.verboseprint("Integrator: RWM METROPOLISED.")
+                self.ψ_generator = lambda B, δ: generate_RWMIntegrator(B, δ, metropolised=self.metropolised)
+                self.ψ = self.ψ_generator(self.B, self._get_δ())
         elif self.integrator.lower() == 'thug':
-            self.verboseprint("Integrator: THUG.")
-            # Instantiate the class, doesn't matter which ξ0 or logpi we use.
-            THUGSampler = TangentialHugSampler(self.manifold.sample(advanced=True), self.B*self._get_δ(), self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method=self.projection_method, safe=True)
-            self.ψ_generator = THUGSampler.generate_hug_integrator # again, this takes B, δ and returns an integrator (notice logpi doesn't matter)
-            self.ψ = self.ψ_generator(self.B, self._get_δ())
+            if not self.metropolised:
+                self.verboseprint("Integrator: THUG.")
+                # Instantiate the class, doesn't matter which ξ0 or logpi we use.
+                THUGSampler = TangentialHugSampler(self.manifold.sample(advanced=True), self.B*self._get_δ(), self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method=self.projection_method, safe=True)
+                self.ψ_generator = THUGSampler.generate_hug_integrator # again, this takes B, δ and returns an integrator (notice logpi doesn't matter)
+                self.ψ = self.ψ_generator(self.B, self._get_δ())
+            else:
+                self.verboseprint("Integrator: THUG METROPOLISED.")
+                THUGSampler = TangentialHugSampler(self.manifold.sample(advanced=True), self.B*self._get_δ(), self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method=self.projection_method, safe=True)
+                self.ψ_generator = lambda B, δ: THUGSampler.generate_hug_integrator(B, δ, metropolised=self.metropolised) # again, this takes B, δ and returns an integrator (notice logpi doesn't matter)
+                self.ψ = self.ψ_generator(self.B, self._get_δ())
         elif self.integrator.lower() == 'hug_and_nhug':
-            self.verboseprint("Integrator: HUG + NHUG.")
-            self.verboseprint("Prop Hug  : ", self.prop_hug)
-            # Instantiate the class, doesn't matter which ξ0 or logpi we use.
-            THUGSampler = TangentialHugSampler(self.manifold.sample(advanced=True), self.B*self._get_δ(), self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method=self.projection_method, safe=True)
-            self.ψ_generator = lambda B, δ: THUGSampler.generate_hug_and_nhug_integrator(B, δ, prop_hug=self.prop_hug) # again, this takes B, δ and returns an integrator (notice logpi doesn't matter)
-            self.ψ = self.ψ_generator(self.B, self._get_δ())
+            if not self.metropolised:
+                self.verboseprint("Integrator: HUG + NHUG.")
+                self.verboseprint("Prop Hug  : ", self.prop_hug)
+                # Instantiate the class, doesn't matter which ξ0 or logpi we use.
+                THUGSampler = TangentialHugSampler(self.manifold.sample(advanced=True), self.B*self._get_δ(), self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method=self.projection_method, safe=True)
+                self.ψ_generator = lambda B, δ: THUGSampler.generate_hug_and_nhug_integrator(B, δ, prop_hug=self.prop_hug) # again, this takes B, δ and returns an integrator (notice logpi doesn't matter)
+                self.ψ = self.ψ_generator(self.B, self._get_δ())
+            else:
+                self.verboseprint("Integrator: HUG + NHUG METROPOLISED.")
+                self.verboseprint("Prop Hug  : ", self.prop_hug)
+                THUGSampler = TangentialHugSampler(self.manifold.sample(advanced=True), self.B*self._get_δ(), self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method=self.projection_method, safe=True)
+                self.ψ_generator = lambda B, δ: THUGSampler.generate_hug_and_nhug_integrator(B, δ, prop_hug=self.prop_hug, metropolised=self.metropolised) # again, this takes B, δ and returns an integrator (notice logpi doesn't matter)
+                self.ψ = self.ψ_generator(self.B, self._get_δ())
         else:
             raise ValueError("Unexpected value found for integrator.")
 
@@ -246,7 +271,7 @@ class MSAdaptive:
 
         # Choose resampling scheme
         if self.resampling_scheme == 'multinomial':
-            resample = lambda W: self.resampling_rng.choice(a=arange(self.N*(self.B+1)), size=self.N, p=W.flatten())
+            resample = lambda W: self.resampling_rng.choice(a=arange(self.N*(self.Bsize+1)), size=self.N, p=W.flatten())
             self.verboseprint("Resampling: MULTINOMIAL.")
         elif self.resampling_scheme == 'systematic':
             resample = lambda W: systematic(W.flatten(), self.N)
@@ -338,9 +363,9 @@ class MSAdaptive:
         self.sampled_x0 = x0
         THUGSampler = TangentialHugSampler(x0, self.B*self._get_δ(), self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method=self.projection_method, safe=True)
         if self.integrator.lower() == 'rwm_then_thug':
-            self.ψ_generator = THUGSampler.generate_hug_integrator # again, this takes B, δ and returns an integrator (notice logpi doesn't matter)
+            self.ψ_generator = lambda B, δ: THUGSampler.generate_hug_integrator(B, δ, metropolised=self.metropolised)# again, this takes B, δ and returns an integrator (notice logpi doesn't matter)
         elif self.integrator.lower() == 'rwm_then_han':
-            self.ψ_generator = lambda B, δ: THUGSampler.generate_hug_and_nhug_integrator(B, δ, prop_hug=self.prop_hug)
+            self.ψ_generator = lambda B, δ: THUGSampler.generate_hug_and_nhug_integrator(B, δ, prop_hug=self.prop_hug, metropolised=self.metropolised)
         else:
             raise NotImplementedError("Attempted switching integrator even though it is neither rwm_then_thug nor rwm_then_han.")
         self.ψ = self.ψ_generator(self.B, self._get_δ())
@@ -350,9 +375,15 @@ class MSAdaptive:
         self.verboseprint("\n")
         self.verboseprint("####################################")
         if self.integrator.lower() == 'rwm_then_thug':
-            self.verboseprint("### SWITCHING TO THUG INTEGRATOR ###")
+            if not self.metropolised:
+                self.verboseprint("### SWITCHING TO THUG INTEGRATOR ###")
+            else:
+                self.verboseprint("### SWITCHING TO THUG INTEGRATOR METROPOLISED ###")
         else:
-            self.verboseprint("### SWITCHING TO HAN INTEGRATOR ###")
+            if not self.metropolised:
+                self.verboseprint("### SWITCHING TO HAN INTEGRATOR ###")
+            else:
+                self.verboseprint("### SWITCHING TO HAN INTEGRATOR METROPOLISED ###")
         self.verboseprint("####################################")
         self.verboseprint("\n")
 
@@ -383,10 +414,10 @@ class MSAdaptive:
         start_time = time()
         #### STORAGE
         self.ZN          = zeros((1, self.N, 2*self.d))            # z_n^{(i)}
-        self.ZNK         = zeros((1, self.N*(self.B+1), 2*self.d)) # z_{n, k}^{(i)} all the N(T+1) particles
-        self.Wbar        = zeros(self.N*(self.B+1))
+        self.ZNK         = zeros((1, self.N*(self.Bsize+1), 2*self.d)) # z_{n, k}^{(i)} all the N(T+1) particles
+        self.Wbar        = zeros(self.N*(self.Bsize+1))
         self.DISTANCES   = zeros(self.N)                      # distances are computed on the z_n^{(i)}
-        self.ESS         = [self.N*(self.B+1)]                     # ESS computed on Wbar so in reference to all N(T+1) particles
+        self.ESS         = [self.N*(self.Bsize+1)]                     # ESS computed on Wbar so in reference to all N(T+1) particles
         self.K_RESAMPLED = zeros(self.N)                    # Stores indeces resampled
         self.PROP_MOVED  = [1.0]                            # Stores proportion of particles moved forward on the trajectories
         #### INITIALIZATION
@@ -414,7 +445,7 @@ class MSAdaptive:
                 #### COMPUTE TRAJECTORIES
                 Z = apply_along_axis(self.ψ, 1, z)                                        # (N, B+1, 2d)
                 if not self.low_memory:
-                    self.ZNK = vstack((self.ZNK, Z.reshape(1, self.N*(self.B+1), 2*self.d)))  # (n+1, N(B+1), 2d)
+                    self.ZNK = vstack((self.ZNK, Z.reshape(1, self.N*(self.Bsize+1), 2*self.d)))  # (n+1, N(B+1), 2d)
                 self.verboseprint("\tTrajectories constructed.")
 
                 #### DETERMINE TOLERANCE TO TARGET AT THIS ITERATION
@@ -424,7 +455,7 @@ class MSAdaptive:
                 #### COMPUTE WEIGHTS
                 # Log-Denominator: shared for each point in the same trajectory
                 log_μnm1_z  = apply_along_axis(self.log_ηs[self.n-1], 1, Z[:, 0, :self.d])         # (N, )
-                log_μnm1_z  = repeat(log_μnm1_z, self.B+1, axis=0).reshape(self.N, self.B+1) # (N, B+1)
+                log_μnm1_z  = repeat(log_μnm1_z, self.Bsize+1, axis=0).reshape(self.N, self.Bsize+1) # (N, B+1)
                 # Log-Numerator: different for each point on a trajectory.
                 log_μn_ψk_z = apply_along_axis(self.log_ηs[self.n], 2, Z[:, :, :self.d])         # (N, B+1)
                 W = self._compute_weights(log_μnm1_z, log_μn_ψk_z)
@@ -435,7 +466,7 @@ class MSAdaptive:
 
                 #### RESAMPLING
                 resampling_indeces = self._resample(W)
-                unravelled_indeces = unravel_index(resampling_indeces, (self.N, self.B+1))
+                unravelled_indeces = unravel_index(resampling_indeces, (self.N, self.Bsize+1))
                 self.K_RESAMPLED = vstack((self.K_RESAMPLED, unravelled_indeces[1]))
                 indeces = dstack(unravelled_indeces).squeeze()
                 z = vstack([Z[tuple(ix)] for ix in indeces])     # (N, 2d)
