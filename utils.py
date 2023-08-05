@@ -12,6 +12,8 @@ from oct2py import octave
 import tensorflow_probability as tfp
 from arviz import ess as ess_arviz
 from arviz import convert_to_dataset
+import http.client, urllib
+from warnings import filterwarnings, catch_warnings
 
 
 def logf(xyz):
@@ -437,7 +439,7 @@ def lighten_color(color, amount=0.5):
 def adagrad(function, gradient, initial_point, learning_rate=0.05, tolerance=1e-8, max_iter=10000):
     """Performs AdaGrad, an adaptive gradient descent optimization strategy to
     minimize the function `function` with gradient `gradient`, using a learning
-    rate `learning_rate`, a tolerance `tolerance` and a maximum number of iterations 
+    rate `learning_rate`, a tolerance `tolerance` and a maximum number of iterations
     `max_iter`, starting from `initial_point`."""
     x = np.array(initial_point)
     grad_squared_sum = np.zeros_like(x)
@@ -451,3 +453,16 @@ def adagrad(function, gradient, initial_point, learning_rate=0.05, tolerance=1e-
             break
 
     return x
+
+
+def send_notification_to_iphone(message=None):
+    if message is None:
+        message = "Code execution has finished"
+    conn = http.client.HTTPSConnection("api.pushover.net:443")
+    conn.request("POST", "/1/messages.json",
+      urllib.parse.urlencode({
+        "token": "a48k86onkpy9mhd6ayemmk6947kz1y",
+        "user": "uxrn3dn32gmek57cig4654i9qy4we1",
+        "message": message,
+      }), { "Content-type": "application/x-www-form-urlencoded" })
+    return conn.getresponse()
