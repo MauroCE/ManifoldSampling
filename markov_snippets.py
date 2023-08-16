@@ -56,6 +56,7 @@ class MSAdaptive:
         self.min_pm = SETTINGS['min_pm'] # if fewer resampled particles have k ≧ 1 than self.min_pm we stop the algorithm (pm stands for prop-moved)
         self.maxiter = SETTINGS['maxiter'] # MS stopped when n ≧ maxiter
         self.verbose = SETTINGS['verbose'] # Whether to print MS progress
+        self.NBbudget = SETTINGS['NBbudget'] # budget for NB adaptation
         self.prop_hug = SETTINGS['prop_hug'] # when using hug_and_nhug, proportion of trajectory generated with hug
         self.εs_fixed = SETTINGS['εs_fixed']   # Sequence of tolerances, this is only used if adaptiveϵ is False
         self.manifold = SETTINGS['manifold'] # Manifold around which we sample
@@ -64,6 +65,7 @@ class MSAdaptive:
         self.adaptiveε = SETTINGS['adaptiveε'] # If true, we adapt ε based on the distances, otherwise we expect a fixed sequence
         self.adaptiveδ = SETTINGS['adaptiveδ'] # If true, we adapt δ based on the proxy acceptance probability.
         self.adaptiveB = SETTINGS['adaptiveB'] # if true, we adapt B. for the moment we only allow one type of adaptation: ESJD+PM
+        self.adaptiveN = SETTINGS['adaptiveN'] # used exclusively when we only change B, for now
         self.z0_manual = SETTINGS['z0_manual'] # Starting particles, used only if initialization is manual
         self.pm_target = SETTINGS['pm_target'] # Target 'proportion of moved' particles the we aim to while adapting δ
         self.pd_target = SETTINGS['pd_target'] # Target particle diversity
@@ -97,6 +99,7 @@ class MSAdaptive:
         assert isinstance(self.min_pm, float), "min_pm must be float."
         assert isinstance(self.maxiter, int), "maxiter must be integer."
         assert isinstance(self.verbose, bool), "verbose must be boolean."
+        assert (self.NBbudget is None) or isinstance(self.NBbudget, int), "NBbudget must be None or int."
         assert isinstance(self.prop_hug, float), "prop_hug must be float."
         assert isinstance(self.εs_fixed, np.ndarray) or (self.εs_fixed is None), "εs must be a numpy array or must be None."
         assert isinstance(self.manifold, Manifold), "manifold must be an instance of class Manifold."
@@ -104,6 +107,7 @@ class MSAdaptive:
         assert isinstance(self.adaptiveε, bool), "adaptiveϵ must be bool."
         assert isinstance(self.adaptiveδ, bool), "adaptiveδ must be bool."
         assert isinstance(self.adaptiveB, bool), "adaptiveB must be bool."
+        assert isinstance(self.adaptiveN, bool), "adaptiveN must be bool."
         assert isinstance(self.z0_manual, np.ndarray) or (self.z0_manual is None), "z0_manual must be a numpy array or None."
         assert isinstance(self.pm_target, float) or isinstance(self.pm_target, list), "pm_target must be float or list."
         assert isinstance(self.pd_target, float) or isinstance(self.pd_target, list), "pd_target must be float or list."
@@ -199,6 +203,11 @@ class MSAdaptive:
             raise ValueError("When B is not adaptive, cannot choose δadaptation_method=esjd_and_pm.")
         if self.adaptiveB and (self.δadaptation_method is None) and self.adaptiveδ:
             raise ValueError("If you are trying to adapt only B, you need adaptiveδ=False and δadaptation_method=None.")
+        # Can only use adaptiveN when adaptiveB=True, δadaptation_method=None and adaptiveδ=False
+        if self.adaptiveN and ((not self.adaptiveB) or (self.δadaptation_method is not None) or (self.adaptiveδ)):
+            raise ValueError("adaptiveN is only valid when adaptiveB=True, δadaptation_method=None, and adaptiveδ=False.")
+        if self.adaptiveN and (not self.low_memory):
+            raise ValueError("N cannot be adapted when low_memory=False.")
 
         # Create functions and variables based on input arguments
         self.verboseprint = print if self.verbose else lambda *a, **k: None  # Prints only when verbose is true
@@ -206,6 +215,7 @@ class MSAdaptive:
         self.switched = False
         self.δs = [self._get_δ()]
         self.Bs = [self.B]
+        self.Ns = [self.N]
         self.resampling_rng = default_rng(seed=self.resampling_seed)
         # Create a new variable B_size. This is to determine the sizes of arrays. basically
         # basically the idea is that this would be different whether it is METROPOLISED or not.
@@ -346,6 +356,28 @@ class MSAdaptive:
             self.update_Wbar       = self._update_Wbar_when_B_not_adaptive
             self.update_ESJD_CHANG = self._update_ESJD_CHANG_when_B_not_adaptive
 
+        # Initialize and update W_SMC
+        if self.adaptiveN:
+            # Initialize and update W_SMC storage
+            self.init_W_SMC        = lambda: [zeros(self.N)]
+            self.update_W_SMC      = self._update_W_SMC_when_N_adaptive
+            # Initialize and update K_RESAMPLED storage
+            self.init_K_RESAMPLED   = lambda: [zeros(self.N)]
+            self.update_K_RESAMPLED = self._update_K_RESAMPLED_when_N_adaptive
+            # Initialize and update N_RESAMPLED storage
+            self.init_N_RESAMPLED   = lambda: [zeros(self.N)]
+            self.update_N_RESAMPLED = self._update_N_RESAMPLED_when_N_adaptive
+        else:
+            # Initialize and update W_SMC storage
+            self.init_W_SMC      = lambda: zeros(self.N)
+            self.update_W_SMC      = self._update_W_SMC_when_N_not_adaptive
+            # Initialize and update K_RESAMPLED storage
+            self.init_K_RESAMPLED   = lambda: zeros(self.N)
+            self.update_K_RESAMPLED = self._update_K_RESAMPLED_when_N_not_adaptive
+            # Initialize and update N_RESAMPLED storage
+            self.init_N_RESAMPLED   = lambda: zeros(self.N)
+            self.update_N_RESAMPLED = self._update_N_RESAMPLED_when_N_not_adaptive
+
     def _update_Wbar_when_B_adaptive(self, W):
         """Updates Wbar when adaptiveB=True."""
         self.Wbar.append(W.flatten())
@@ -361,6 +393,30 @@ class MSAdaptive:
     def _update_ESJD_CHANG_when_B_not_adaptive(self, Z, W):
         """Updates ESJD_CHANG when adaptiveB=False."""
         self.ESJD_CHANG = vstack((self.ESJD_CHANG, self._compute_esjd_br_chang(Z, W)))
+
+    def _update_W_SMC_when_N_adaptive(self, normalized_SMC_weights):
+        """Updates W_SMC when adaptiveN=True."""
+        self.W_SMC.append(normalized_SMC_weights)
+
+    def _update_W_SMC_when_N_not_adaptive(self, unnormalized_SMC_weights):
+        """Updates W_SMC when adaptiveN=False."""
+        self.W_SMC = vstack((self.W_SMC, unnormalized_SMC_weights))
+
+    def _update_K_RESAMPLED_when_N_adaptive(self, indices):
+        """Updates when adaptiveN=True."""
+        self.K_RESAMPLED.append(indices)
+
+    def _update_K_RESAMPLED_when_N_not_adaptive(self, indices):
+        """Updates when adaptiveN=False."""
+        self.K_RESAMPLED = vstack((self.K_RESAMPLED, indices))
+
+    def _update_N_RESAMPLED_when_N_adaptive(self, indices):
+        """Updates when adaptiveN=True."""
+        self.N_RESAMPLED.append(indices)
+
+    def _update_N_RESAMPLED_when_N_not_adaptive(self, indices):
+        """Updates when adaptiveN=False."""
+        self.N_RESAMPLED = vstack((self.N_RESAMPLED, indices))
 
     def _set_B(self, B):
         """Sets the new value of B."""
@@ -504,6 +560,10 @@ class MSAdaptive:
             self._set_B(clip(np.argmax(np.cumsum(self.ESJD_CHANG[-1]) >= np.sum(self.ESJD_CHANG[-1])*self.prop_esjd), self.Bmin, self.Bmax))
             self.ψ = self.ψ_generator(self.B, self.δ)
             self.verboseprint("\tNumber of steps adapted to: {}".format(self.B))
+            if self.adaptiveN:
+                # adapt N based on budget
+                self.N = int(self.NBbudget / self.B)
+                self.Ns.append(self.N)
         else:
             self.δs.append(self._get_δ())
             self.verboseprint("\tStep-size kept fixed at: {:.16f}".format(self._get_δ()))
@@ -585,6 +645,17 @@ class MSAdaptive:
         """Returns resampled indeces."""
         raise NotImplementedError("Resampling not implemented.")
 
+    def _whittle_down_to_new_N(self, z):
+        """This is used when adaptiveN=True. In this case, we randomly pick self.N
+        particles to continue the algorithm."""
+        if self.adaptiveN:
+            # Choose indeces at random (uniformly)
+            N_old = z.shape[0]
+            indices = choice(a=arange(N_old).astype(int), size=self.N, p=np.repeat(1/N_old, repeats=N_old)).astype(int)
+            return z[indices, :]
+        else:
+            return z
+
     def sample(self):
         """Samples using the Markov Snippets algorithm."""
         start_time = time()
@@ -592,12 +663,12 @@ class MSAdaptive:
         self.ZN          = zeros((1, self.N, 2*self.d))            # z_n^{(i)}
         self.ZNK         = zeros((1, self.N*(self.Bsize()+1), 2*self.d)) # z_{n, k}^{(i)} all the N(T+1) particles
         self.Wbar        = self.init_Wbar() #zeros(self.N*(self.Bsize()+1))
-        self.W_SMC       = zeros(self.N)                       # weights for underlying SMC sampler
+        self.W_SMC       = self.init_W_SMC()                       # weights for underlying SMC sampler
         self.DISTANCES   = zeros(self.N)                      # distances are computed on the z_n^{(i)}
         self.ESS         = [self.N*(self.Bsize()+1)]                     # ESS computed on Wbar so in reference to all N(T+1) particles
         self.ESS_SMC     = [self.N]                         # ESS of the underlying SMC sampler
-        self.K_RESAMPLED = zeros(self.N)                    # Stores indeces within the trajectory that have been resampled
-        self.N_RESAMPLED = zeros(self.N)                    # Stores the indeces of the particle-trajectory that have been resampled
+        self.K_RESAMPLED = self.init_K_RESAMPLED() #zeros(self.N)                    # Stores indeces within the trajectory that have been resampled
+        self.N_RESAMPLED = self.init_N_RESAMPLED() #zeros(self.N)                    # Stores the indeces of the particle-trajectory that have been resampled
         self.PROP_MOVED  = [1.0]                            # Stores proportion of particles moved forward on the trajectories
         self.P_DIVERSITY = [1.0]                            # particle_diversity is the equivalent of PM for the particle index rather than trajectory index.
         self.DIV_MOVED   = [1.0]                            # diversity_moved is the multiplication of prop_moved and p_diversity
@@ -650,17 +721,16 @@ class MSAdaptive:
                 # therefore we will have N weights, one per particle
                 unnormalized_SMC_weights = np.mean(W, axis=1)  # these are unnormalized
                 normalized_SMC_weights = unnormalized_SMC_weights / unnormalized_SMC_weights.sum() # these are normalized!
-                self.W_SMC   = vstack((self.W_SMC, normalized_SMC_weights))
+                self.update_W_SMC(normalized_SMC_weights) #vstack((self.W_SMC, normalized_SMC_weights))
                 self.verboseprint("\tSMC Weights computed and normalized.")
                 self.ESS_SMC.append(1 / np.sum(self.W_SMC[-1]**2))
                 # Compute ESJD-BR (Chang's version)
                 self.update_ESJD_CHANG(Z, W) # self.ESJD_CHANG = vstack((self.ESJD_CHANG, self._compute_esjd_br_chang(Z, W)))
-
                 #### RESAMPLING
                 resampling_indeces = self._resample(W)
                 unravelled_indeces = unravel_index(resampling_indeces, (self.N, self.Bsize()+1))
-                self.K_RESAMPLED = vstack((self.K_RESAMPLED, unravelled_indeces[1]))
-                self.N_RESAMPLED = vstack((self.N_RESAMPLED, unravelled_indeces[0]))
+                self.update_K_RESAMPLED(unravelled_indeces[1]) #vstack((self.K_RESAMPLED, unravelled_indeces[1]))
+                self.update_N_RESAMPLED(unravelled_indeces[0]) #vstack((self.N_RESAMPLED, unravelled_indeces[0]))
                 indeces = dstack(unravelled_indeces).squeeze()
                 z = vstack([Z[tuple(ix)] for ix in indeces])     # (N, 2d)
                 self.verboseprint("\tParticles Resampled.")
@@ -683,6 +753,7 @@ class MSAdaptive:
                 self.verboseprint("\tMoved Diversity: {:.16f}".format(self.DIV_MOVED[self.n]))
                 # Adapt δ basedn on proxy acceptance probability
                 self._update_δ_B_ψ()
+                z = self._whittle_down_to_new_N(z)
 
                 #### CHECK IF IT'S TIME TO SWITCH INTEGRATOR
                 if (self.integrator.lower() == 'rwm_then_thug') or (self.integrator.lower() == 'rwm_then_han'):  # only happens when we allow switching
