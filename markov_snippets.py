@@ -51,17 +51,23 @@ class MSAdaptive:
         self.δmin = SETTINGS['δmin']       # δ ≧ δmin when adaptive
         self.δmax = SETTINGS['δmax']       # δ ≦ δmax when step size is adaptive
         self.εmin = SETTINGS['εmin']       # ε ≧ εmin when tolerance is adaptive
+        self.Bmin = SETTINGS['Bmin']       # minimum number of steps, used when adaptiveB=True
+        self.Bmax = SETTINGS['Bmax']       # maximum number of steps, used when adaptiveB=False
         self.min_pm = SETTINGS['min_pm'] # if fewer resampled particles have k ≧ 1 than self.min_pm we stop the algorithm (pm stands for prop-moved)
         self.maxiter = SETTINGS['maxiter'] # MS stopped when n ≧ maxiter
         self.verbose = SETTINGS['verbose'] # Whether to print MS progress
         self.prop_hug = SETTINGS['prop_hug'] # when using hug_and_nhug, proportion of trajectory generated with hug
         self.εs_fixed = SETTINGS['εs_fixed']   # Sequence of tolerances, this is only used if adaptiveϵ is False
         self.manifold = SETTINGS['manifold'] # Manifold around which we sample
+        self.prop_esjd = SETTINGS['prop_esjd'] # proportion used when adapting δ based on ESJD
         self.ε0_manual = SETTINGS['ε0_manual'] # When initialization is 'manual' then this is the ϵ0 that we assume it has been sampled from
         self.adaptiveε = SETTINGS['adaptiveε'] # If true, we adapt ε based on the distances, otherwise we expect a fixed sequence
         self.adaptiveδ = SETTINGS['adaptiveδ'] # If true, we adapt δ based on the proxy acceptance probability.
+        self.adaptiveB = SETTINGS['adaptiveB'] # if true, we adapt B. for the moment we only allow one type of adaptation: ESJD+PM
         self.z0_manual = SETTINGS['z0_manual'] # Starting particles, used only if initialization is manual
         self.pm_target = SETTINGS['pm_target'] # Target 'proportion of moved' particles the we aim to while adapting δ
+        self.pd_target = SETTINGS['pd_target'] # Target particle diversity
+        self.dm_target = SETTINGS['dm_target'] # Target diversity moved
         self.pm_switch = SETTINGS['pm_switch'] # when the proportion of particles moved is less than this, we switch
         self.prior_seed = SETTINGS['prior_seed'] # Seed to used when initializing the particles from the prior, to allow reproducibility
         self.low_memory = SETTINGS['low_memory'] # whether to use a low-memory version or not. Low memory does not store ZNK
@@ -70,11 +76,13 @@ class MSAdaptive:
         self.metropolised = SETTINGS['metropolised'] # whether to keep whole trajectory (False) or only start and end (True)
         self.quantile_value = SETTINGS['quantile_value'] # Used to determine the next ϵ
         self.initialization = SETTINGS['initialization'] # type of initialization to use
+        self.proxy_ap_metric = SETTINGS['proxy_ap_metric'] # which metric to use to adaptδ (pm, pd, or md)
         self.switch_strategy = SETTINGS['switch_strategy'] # strategy used to determine when to switch RWM->THUG.
         self.resampling_seed = SETTINGS['resampling_seed'] # seed for resampling
         self.resampling_scheme = SETTINGS['resampling_scheme'] # resampling scheme to use
         self.projection_method = SETTINGS['projection_method'] # method used in THUG to project ('linear' or 'qr')
         self.stopping_criterion = SETTINGS['stopping_criterion'] # determines strategy used to terminate the algorithm
+        self.δadaptation_method = SETTINGS['δadaptation_method'] # determines adaptation method of δ
 
         # Check arguments types
         assert isinstance(self.N,  int), "N must be an integer."
@@ -84,16 +92,22 @@ class MSAdaptive:
         assert isinstance(self.δmin, float), "δmin must be float."
         assert isinstance(self.δmax, float), "δmax must be float."
         assert isinstance(self.εmin, float), "εmin must be float."
+        assert isinstance(self.Bmin, int), "Bmin must be float."
+        assert isinstance(self.Bmax, int), "Bmax must be float."
         assert isinstance(self.min_pm, float), "min_pm must be float."
         assert isinstance(self.maxiter, int), "maxiter must be integer."
         assert isinstance(self.verbose, bool), "verbose must be boolean."
         assert isinstance(self.prop_hug, float), "prop_hug must be float."
         assert isinstance(self.εs_fixed, np.ndarray) or (self.εs_fixed is None), "εs must be a numpy array or must be None."
         assert isinstance(self.manifold, Manifold), "manifold must be an instance of class Manifold."
+        assert isinstance(self.prop_esjd, float), "prop_esjd must be a float."
         assert isinstance(self.adaptiveε, bool), "adaptiveϵ must be bool."
         assert isinstance(self.adaptiveδ, bool), "adaptiveδ must be bool."
+        assert isinstance(self.adaptiveB, bool), "adaptiveB must be bool."
         assert isinstance(self.z0_manual, np.ndarray) or (self.z0_manual is None), "z0_manual must be a numpy array or None."
         assert isinstance(self.pm_target, float) or isinstance(self.pm_target, list), "pm_target must be float or list."
+        assert isinstance(self.pd_target, float) or isinstance(self.pd_target, list), "pd_target must be float or list."
+        assert isinstance(self.dm_target, float) or isinstance(self.dm_target, list), "dm_target must be float or list."
         assert isinstance(self.pm_switch, float), "pm_switch must be float."
         assert isinstance(self.prior_seed, int), "prior_seed must be integer."
         assert isinstance(self.low_memory, bool), "low_memory must be bool."
@@ -102,12 +116,14 @@ class MSAdaptive:
         assert isinstance(self.metropolised, bool), "metropolised must be bool."
         assert (self.ε0_manual is None) or isinstance(self.ε0_manual, float), "ε0_manual must be float or None."
         assert isinstance(self.quantile_value, float) or isinstance(self.quantile_value, list), "quantile_value must be a float or list."
+        assert isinstance(self.proxy_ap_metric, str), "proxy_ap_metric must be string."
         assert isinstance(self.initialization, str), "initialization must be a string."
         assert isinstance(self.switch_strategy, str), "switch_strategy must be a string."
         assert isinstance(self.resampling_seed, int), "resampling seed must be integer."
         assert isinstance(self.resampling_scheme, str), "resampling_scheme must be a string."
         assert isinstance(self.projection_method, str), "projection_method must be a string."
         assert isinstance(self.stopping_criterion, set), "stopping criterion must be a set."
+        assert (self.δadaptation_method is None) or isinstance(self.δadaptation_method, str), "δadaptation_method must be a string or None."
 
 
         # Check argument values
@@ -120,10 +136,12 @@ class MSAdaptive:
         else:
             raise ValueError("δ can only be a list when using rwm_then_thug or rwm_then_han integrator and adaptiveδ=False.")
         assert (self.εs_fixed is None) or all(x>y for x, y in zip(self.εs_fixed, self.εs_fixed[1:])), "εs must be a strictly decreasing list, or None."
+        assert (self.prop_esjd > 0.0) and (self.prop_esjd <= 1.0), "self.prop_esjd must be in [0, 1]."
         assert (self.prop_hug >=0) and (self.prop_hug <= 1.0), "prop_hug must be in [0, 1]."
         assert self.δmin > 0.0, "δmin must be larger than 0."
         assert self.δmin <= self.δmax, "δmin must be less than or equal to δmax."
         assert self.εmin > 0.0, "εmin must be larger than 0."
+        assert (self.Bmin > 1) and (self.Bmax > self.Bmin), "Bmin must be at least 1 and Bmax must be larger than Bmin."
         assert (self.min_pm >= 0.0) and (self.min_pm <= 1.0), "min_pm must be in [0, 1]."
         if isinstance(self.pm_target, float):
             assert (self.pm_target >= 0) and (self.pm_target <= 1.0), "pm_target must be in [0, 1]."
@@ -132,6 +150,20 @@ class MSAdaptive:
         else: # is it a list and the integrator is rwm_then_thug
             for pmt in self.pm_target:
                 assert (pmt >= 0) and (pmt <= 1.0), "each element in pm_target must be in [0, 1]."
+        if isinstance(self.pd_target, float):
+            assert (self.pd_target >= 0) and (self.pd_target <= 1.0), "pd_target must be in [0, 1]."
+        elif isinstance(self.pd_target, list) and (self.integrator.lower() not in ['rwm_then_thug', 'rwm_then_han']):
+            raise ValueError("pd_target must be float if integrator is not rwm_then_thug or rwm_then_han.")
+        else:
+            for pdt in self.pd_target:
+                assert (pdt >= 0) and (pdt <= 1.0), "each element in pd_target must be in [0, 1]."
+        if isinstance(self.dm_target, float):
+            assert (self.dm_target >= 0) and (self.dm_target <= 1.0), "dm_target must be in [0, 1]."
+        elif isinstance(self.md_target, list) and (self.integrator.lower() not in ['rwm_then_thug', 'rwm_then_han']):
+            raise ValueError("dm_target must be float if integrator is not rwm_then_thug or rwm_then_han.")
+        else:
+            for mdt in self.md_target:
+                assert (mdt >= 0) and (mdt <= 1.0), "each element in md_target must be in [0, 1]."
         assert (self.pm_switch >= 0) and (self.pm_switch <= 1.0), "pm_switch must be in [0, 1]."
         assert self.integrator.lower() in ['rwm', 'thug', 'rwm_then_thug', 'hug_and_nhug', 'rwm_then_han'], "integrator must be one of 'RWM', 'THUG', 'RWM_THEN_THUG', 'HUG_AND_HUG', 'RWM_THEN_HAN', 'RWM_KERNEL'."
         assert (self.εprop_switch >= 0.0) and (self.εprop_switch <= 1.0), "εprop_switch must be in [0, 1]."
@@ -144,6 +176,7 @@ class MSAdaptive:
                 assert isinstance(q, float), "each quantile_value must be a float."
         else:
             raise ValueError("quantile_value must be float, or can be a list of length 2 with 2 float only when the integrator is rwm_then_thug or rwm_then_han.")
+        assert self.proxy_ap_metric in ['pm', 'pd', 'dm'], "proxy_ap_metric must be one of 'pm', 'pd', or 'dm'."
         assert self.initialization in ['prior', 'manual'], "initialization must be one of 'prior' or 'manual'."
         assert self.switch_strategy in ['εprop', 'pm'], "switch_strategy must be one of 'εprop' or 'pm'."
         if isinstance(self.z0_manual, np.ndarray):
@@ -153,17 +186,31 @@ class MSAdaptive:
         assert self.resampling_scheme in ['multinomial', 'systematic'], "resampling scheme must be one of multinomial or resampling."
         assert self.projection_method in ['linear', 'qr']
         assert len(self.stopping_criterion) >= 1, "There must be at least one stopping criterion."
+        assert (self.δadaptation_method in ['ap', 'esjd', 'esjd_and_pm']) or (self.δadaptation_method is None), "δadaptation_method must be None, 'ap', 'esjd', or 'esjd_and_pm'."
+        if (self.δadaptation_method is None) and self.adaptiveδ:
+            raise ValueError("When δadaptation_method is None, adaptiveδ must be set to False.")
+        if (self.δadaptation_method is not None) and (not self.adaptiveδ):
+            raise ValueError("When δadaptation_method is not None, adaptiveδ must be set to True.")
+        if self.adaptiveB and self.δadaptation_method not in ['esjd_and_pm', None]:
+            raise ValueError("When adaptiveB=True, δadaptation_method must be set to esjd_and_pm, or to None.")
+        if self.adaptiveB and (not self.low_memory):
+            raise ValueError("When B is adaptive, we need to use low memory as we cannot save particles into an array: they have a different size each time.")
+        if (not self.adaptiveB) and (self.δadaptation_method == 'esjd_and_pm'):
+            raise ValueError("When B is not adaptive, cannot choose δadaptation_method=esjd_and_pm.")
+        if self.adaptiveB and (self.δadaptation_method is None) and self.adaptiveδ:
+            raise ValueError("If you are trying to adapt only B, you need adaptiveδ=False and δadaptation_method=None.")
 
         # Create functions and variables based on input arguments
         self.verboseprint = print if self.verbose else lambda *a, **k: None  # Prints only when verbose is true
         self.univariate = True if (self.manifold.get_codimension() == 1) else False # basically keeps track if it is uni or multi variate.
         self.switched = False
         self.δs = [self._get_δ()]
+        self.Bs = [self.B]
         self.resampling_rng = default_rng(seed=self.resampling_seed)
         # Create a new variable B_size. This is to determine the sizes of arrays. basically
         # basically the idea is that this would be different whether it is METROPOLISED or not.
         # this variable would not be affected by later versions of the program that adapt B.
-        self.Bsize = self.B if not self.metropolised else 1
+        self.Bsize = lambda: self.B if not self.metropolised else 1
 
         # Choose correct integrator to use
         if (self.integrator.lower() == 'rwm') or (self.integrator.lower() == 'rwm_then_thug') or (self.integrator.lower() == 'rwm_then_han'):
@@ -238,8 +285,11 @@ class MSAdaptive:
 
         # Choose correct distance function
         if self.univariate:
+            # Computes q(z) for each initial particle for a univariate problem Rn -> R
             self.compute_distances = self._compute_distances_univariate
+            # Computes ||z_{n, k} - z_{n, 0}||^2 for all
         else:
+            # Computes q(z) for each initial particle for a multivariate problem Rn -> Rm
             self.compute_distances = self._compute_distances_multivariate
 
         # Determine whether to switch RWM -> THUG or not
@@ -271,7 +321,7 @@ class MSAdaptive:
 
         # Choose resampling scheme
         if self.resampling_scheme == 'multinomial':
-            resample = lambda W: self.resampling_rng.choice(a=arange(self.N*(self.Bsize+1)), size=self.N, p=W.flatten())
+            resample = lambda W: self.resampling_rng.choice(a=arange(self.N*(self.Bsize()+1)), size=self.N, p=W.flatten())
             self.verboseprint("Resampling: MULTINOMIAL.")
         elif self.resampling_scheme == 'systematic':
             resample = lambda W: systematic(W.flatten(), self.N)
@@ -279,6 +329,47 @@ class MSAdaptive:
         else:
             raise ValueError("Resampling scheme must be either multinomial or systematic.")
         self._resample = resample
+
+        # Choose how to initiate and update Wbar and ESJD_CHANG
+        if self.adaptiveB:
+            # if adaptive, we cannot use numpy arrays, we must use lists
+            self.init_Wbar       = lambda: [zeros(self.N*(self.Bsize()+1))]
+            self.init_ESJD_CHANG = lambda: [zeros(self.Bsize()+1)]
+            # if adaptive, we need to append to the list
+            self.update_Wbar       = self._update_Wbar_when_B_adaptive
+            self.update_ESJD_CHANG = self._update_ESJD_CHANG_when_B_adaptive
+        else:
+            # if not adaptive, initiate as zero arrays
+            self.init_Wbar       = lambda: zeros(self.N*(self.Bsize()+1))
+            self.init_ESJD_CHANG = lambda: zeros(self.Bsize()+1)
+            # if not adaptive, update by stacking on the arrays
+            self.update_Wbar       = self._update_Wbar_when_B_not_adaptive
+            self.update_ESJD_CHANG = self._update_ESJD_CHANG_when_B_not_adaptive
+
+    def _update_Wbar_when_B_adaptive(self, W):
+        """Updates Wbar when adaptiveB=True."""
+        self.Wbar.append(W.flatten())
+
+    def _update_Wbar_when_B_not_adaptive(self, W):
+        """Updates Wbar when adaptiveB=False."""
+        self.Wbar = vstack((self.Wbar, W.flatten()))
+
+    def _update_ESJD_CHANG_when_B_adaptive(self, Z, W):
+        """Updates ESJD_CHANG when adpativeB=True."""
+        self.ESJD_CHANG.append(self._compute_esjd_br_chang(Z, W))
+
+    def _update_ESJD_CHANG_when_B_not_adaptive(self, Z, W):
+        """Updates ESJD_CHANG when adaptiveB=False."""
+        self.ESJD_CHANG = vstack((self.ESJD_CHANG, self._compute_esjd_br_chang(Z, W)))
+
+    def _set_B(self, B):
+        """Sets the new value of B."""
+        self.B = B
+        self.Bs.append(B)
+
+    def _set_δ(self, δ):
+        """Sets new value of δ."""
+        self.δ = δ
 
     def _get_δ(self):
         """Grabs δ. This is now needed because we are allowing self.δ to be a list of
@@ -293,6 +384,10 @@ class MSAdaptive:
             return self.δ
         else:
             raise ValueError("Something went wrong when grabbing δ.")
+
+    def _get_B(self):
+        """Returns B"""
+        return self.B
 
     def _get_quantile_value(self):
         """Grabs the quantile value in a similar way in which _get_δ() grabs δ."""
@@ -329,6 +424,19 @@ class MSAdaptive:
         else:
             self.DISTANCES = vstack((self.DISTANCES, distances))
 
+    def _compute_esjd_br_chang(self, Z, W):
+        """Computes Expected Squared Jump Distance (Before Resampling) a la Chang.
+        Chang's original metric was:
+
+        ESJD-BR_{n, k} = sum_{i=1}^N bar{W}_{n, k}^{(i)} ||z_{n, k}^{(i)} - z_{n, 0}^{(i)}||^2
+
+        But in our case I want to use the x-distances.
+
+                    || x_{n, k}^{(i)} - x_{n, 0}^{(i)} ||^2
+        It expects Z to be (N, B+1, 2d).
+        """
+        return np.sum(W * (norm(Z[:, :, :self.d] - Z[:, 0:1, :self.d], axis=2)**2), axis=0)
+
     def _compute_weights(self, log_μnm1_z, log_μn_ψk_z):
         """Computes weights using the log-sum-exp trick."""
         logw    = log_μn_ψk_z - log_μnm1_z  # unnormalized log-weights (N, B+1)
@@ -343,15 +451,59 @@ class MSAdaptive:
         """Computes distances for a univariate constraint function."""
         return abs(apply_along_axis(self.manifold.q, 1, x_particles))
 
-    def _update_δ_and_ψ(self):
-        """If self.adaptiveδ is True, then we adapt based on proxy AP. Otherwise
+    def _output_adapted_δ(self):
+        if self.proxy_ap_metric == 'pm':
+            return clip(exp(log(self.δ) + 0.5*(self.PROP_MOVED[self.n] - self._get_pm_target())), self.δmin, self.δmax)
+        elif self.proxy_ap_metric == 'pd':
+            return clip(exp(log(self.δ) + 0.5*(self.P_DIVERSITY[self.n] - self._get_pd_target())), self.δmin, self.δmax)
+        elif self.proxy_ap_metric == 'dm':
+            return clip(exp(log(self.δ) + 0.5*(self.DIV_MOVED[self.n] - self._get_dm_target())), self.δmin, self.δmax)
+
+    def _update_δ_B_ψ(self):
+        """If self.adaptiveδ is True, then we adapt based on proxy AP or on ESJD. Otherwise
         we keep it the same. When adapting δ, we must remember to adapt ψ since
         now the integrator will be different."""
         if self.adaptiveδ:
-            self.δ = clip(exp(log(self.δ) + 0.5*(self.PROP_MOVED[self.n] - self._get_pm_target())), self.δmin, self.δmax)
+            if self.δadaptation_method == 'ap':
+                self.δ = self._output_adapted_δ()
+            elif self.δadaptation_method == 'esjd':
+                # Compute a value of B that avoids waisting resources
+                B_efficient = np.argmax(np.cumsum(self.ESJD_CHANG[-1]) >= np.sum(self.ESJD_CHANG[-1])*self.prop_esjd)
+                # Update delta to make sure we integrate the same amount
+                self._set_δ(clip((B_efficient / self.B)*self.δ, self.δmin, self.δmax))
+            elif self.δadaptation_method == 'esjd_and_pm' and self.adaptiveB:
+                # if the average ESJD on the last 3 integration steps is above the median, then we increase B
+                if np.mean(self.ESJD_CHANG[-1][-2:]) > np.median(self.ESJD_CHANG[-1]):
+                    # # first find δ based on PM, but only use it to update B. Keep δ as is
+                    # δ_new = clip(exp(log(self.δ) + 0.5*(self.PROP_MOVED[self.n] - self._get_pm_target())), self.δmin, self.δmax)
+                    # # then update B based on that
+                    # self._set_B(clip(int(self.B*δ_new/self.δ), self.Bmin, self.Bmax))
+                    # self.verboseprint("\tIncreasing B={} and keeping δ={} fixed.".format(self.B, self.δ))
+                    #### JUST INCREASE DELTA
+                    self._set_δ(self._output_adapted_δ())
+                else:
+                    # in this case, first use ESJD to find Befficient, just like above
+                    B_efficient = clip(np.argmax(np.cumsum(self.ESJD_CHANG[-1]) >= np.sum(self.ESJD_CHANG[-1])*self.prop_esjd), self.Bmin, self.Bmax)
+                    T_efficient = B_efficient * self.δ
+                    # then use PM to find step size
+                    δ_efficient = self.B*self.δ/B_efficient
+                    δ_new = self._output_adapted_δ()
+                    self._set_δ(δ_new)
+                    # divide T_efficient by new step size to find new B
+                    self._set_B(clip(int(T_efficient / δ_new), self.Bmin, self.Bmax))
+            else:
+                raise ValueError("δadaptation_method is neither 'ap' nor 'esjd' but adaptiveδ is True.")
+            # Update delta and store it
             self.δs.append(self.δ)
             self.ψ = self.ψ_generator(self.B, self.δ)
-            self.verboseprint("\tStep-size adapted to: {:.16f}".format(self.δ))
+            self.verboseprint("\tStep-size adapted to: {:.16f} with strategy {}".format(self.δ, self.δadaptation_method))
+            if self.δadaptation_method == 'esjd_and_pm' and self.adaptiveB:
+                self.verboseprint("\tNumber of steps adapted to: {}".format(self.B))
+        elif self.adaptiveB and (not self.adaptiveδ) and (self.δadaptation_method is None):
+            # In this case we only adapt B
+            self._set_B(clip(np.argmax(np.cumsum(self.ESJD_CHANG[-1]) >= np.sum(self.ESJD_CHANG[-1])*self.prop_esjd), self.Bmin, self.Bmax))
+            self.ψ = self.ψ_generator(self.B, self.δ)
+            self.verboseprint("\tNumber of steps adapted to: {}".format(self.B))
         else:
             self.δs.append(self._get_δ())
             self.verboseprint("\tStep-size kept fixed at: {:.16f}".format(self._get_δ()))
@@ -405,6 +557,30 @@ class MSAdaptive:
         else:
             raise ValueError("pm target must be list or float, but found: ", type(self.pm_target))
 
+    def _get_pd_target(self):
+        """Returns the correct pd target both if it is a float or a list."""
+        if isinstance(self.pd_target, float):
+            return self.pd_target
+        elif isinstance(self.pd_target, list):
+            if self.switched:
+                return self.pd_target[1]
+            else:
+                return self.pd_target[0]
+        else:
+            raise ValueError("pd target must be list or float, but found: ", type(self.pd_target))
+
+    def _get_dm_target(self):
+        """Returns the correct md target both if it is a float or a list."""
+        if isinstance(self.dm_target, float):
+            return self.dm_target
+        elif isinstance(self.dm_target, list):
+            if self.switched:
+                return self.dm_target[1]
+            else:
+                return self.dm_target[0]
+        else:
+            raise ValueError("dm target must be list or float, but found: ", type(self.dm_target))
+
     def _resample(self, W):
         """Returns resampled indeces."""
         raise NotImplementedError("Resampling not implemented.")
@@ -414,12 +590,18 @@ class MSAdaptive:
         start_time = time()
         #### STORAGE
         self.ZN          = zeros((1, self.N, 2*self.d))            # z_n^{(i)}
-        self.ZNK         = zeros((1, self.N*(self.Bsize+1), 2*self.d)) # z_{n, k}^{(i)} all the N(T+1) particles
-        self.Wbar        = zeros(self.N*(self.Bsize+1))
+        self.ZNK         = zeros((1, self.N*(self.Bsize()+1), 2*self.d)) # z_{n, k}^{(i)} all the N(T+1) particles
+        self.Wbar        = self.init_Wbar() #zeros(self.N*(self.Bsize()+1))
+        self.W_SMC       = zeros(self.N)                       # weights for underlying SMC sampler
         self.DISTANCES   = zeros(self.N)                      # distances are computed on the z_n^{(i)}
-        self.ESS         = [self.N*(self.Bsize+1)]                     # ESS computed on Wbar so in reference to all N(T+1) particles
-        self.K_RESAMPLED = zeros(self.N)                    # Stores indeces resampled
+        self.ESS         = [self.N*(self.Bsize()+1)]                     # ESS computed on Wbar so in reference to all N(T+1) particles
+        self.ESS_SMC     = [self.N]                         # ESS of the underlying SMC sampler
+        self.K_RESAMPLED = zeros(self.N)                    # Stores indeces within the trajectory that have been resampled
+        self.N_RESAMPLED = zeros(self.N)                    # Stores the indeces of the particle-trajectory that have been resampled
         self.PROP_MOVED  = [1.0]                            # Stores proportion of particles moved forward on the trajectories
+        self.P_DIVERSITY = [1.0]                            # particle_diversity is the equivalent of PM for the particle index rather than trajectory index.
+        self.DIV_MOVED   = [1.0]                            # diversity_moved is the multiplication of prop_moved and p_diversity
+        self.ESJD_CHANG  = self.init_ESJD_CHANG() #zeros(self.Bsize()+1)              # Expected Squared Jump Distance computed for each index k, a la Chang
         #### INITIALIZATION
         z = self.initialize_particles()   # (N, 2d)
         self.ZN[0] = z
@@ -443,9 +625,9 @@ class MSAdaptive:
                 self.verboseprint("\tQuantile Value: ", self._get_quantile_value())
 
                 #### COMPUTE TRAJECTORIES
-                Z = apply_along_axis(self.ψ, 1, z)                                        # (N, B+1, 2d)
+                Z = apply_along_axis(self.ψ, 1, z)                                     # (N, B+1, 2d)
                 if not self.low_memory:
-                    self.ZNK = vstack((self.ZNK, Z.reshape(1, self.N*(self.Bsize+1), 2*self.d)))  # (n+1, N(B+1), 2d)
+                    self.ZNK = vstack((self.ZNK, Z.reshape(1, self.N*(self.Bsize()+1), 2*self.d)))  # (n+1, N(B+1), 2d)
                 self.verboseprint("\tTrajectories constructed.")
 
                 #### DETERMINE TOLERANCE TO TARGET AT THIS ITERATION
@@ -455,19 +637,30 @@ class MSAdaptive:
                 #### COMPUTE WEIGHTS
                 # Log-Denominator: shared for each point in the same trajectory
                 log_μnm1_z  = apply_along_axis(self.log_ηs[self.n-1], 1, Z[:, 0, :self.d])         # (N, )
-                log_μnm1_z  = repeat(log_μnm1_z, self.Bsize+1, axis=0).reshape(self.N, self.Bsize+1) # (N, B+1)
+                log_μnm1_z  = repeat(log_μnm1_z, self.Bsize()+1, axis=0).reshape(self.N, self.Bsize()+1) # (N, B+1)
                 # Log-Numerator: different for each point on a trajectory.
                 log_μn_ψk_z = apply_along_axis(self.log_ηs[self.n], 2, Z[:, :, :self.d])         # (N, B+1)
                 W = self._compute_weights(log_μnm1_z, log_μn_ψk_z)
                 self.verboseprint("\tWeights computed and normalized.")
                 # Store weights and ESS
-                self.Wbar = vstack((self.Wbar, W.flatten()))
-                self.ESS.append(1 / np.sum(W**2))
+                self.update_Wbar(W) #self.Wbar = vstack((self.Wbar, W.flatten()))
+                self.ESS.append(1 / np.sum(W**2))   ### This only works because weights are already normalized!!!
+                # Compute the ESS of the underlying SMC sampler. To do so, we need to compute the
+                # underlying SMC weights. These are the \bar{w}_n. There is one of them for each particle
+                # therefore we will have N weights, one per particle
+                unnormalized_SMC_weights = np.mean(W, axis=1)  # these are unnormalized
+                normalized_SMC_weights = unnormalized_SMC_weights / unnormalized_SMC_weights.sum() # these are normalized!
+                self.W_SMC   = vstack((self.W_SMC, normalized_SMC_weights))
+                self.verboseprint("\tSMC Weights computed and normalized.")
+                self.ESS_SMC.append(1 / np.sum(self.W_SMC[-1]**2))
+                # Compute ESJD-BR (Chang's version)
+                self.update_ESJD_CHANG(Z, W) # self.ESJD_CHANG = vstack((self.ESJD_CHANG, self._compute_esjd_br_chang(Z, W)))
 
                 #### RESAMPLING
                 resampling_indeces = self._resample(W)
-                unravelled_indeces = unravel_index(resampling_indeces, (self.N, self.Bsize+1))
+                unravelled_indeces = unravel_index(resampling_indeces, (self.N, self.Bsize()+1))
                 self.K_RESAMPLED = vstack((self.K_RESAMPLED, unravelled_indeces[1]))
+                self.N_RESAMPLED = vstack((self.N_RESAMPLED, unravelled_indeces[0]))
                 indeces = dstack(unravelled_indeces).squeeze()
                 z = vstack([Z[tuple(ix)] for ix in indeces])     # (N, 2d)
                 self.verboseprint("\tParticles Resampled.")
@@ -482,8 +675,14 @@ class MSAdaptive:
                 # Compute proxy acceptance probability
                 self.PROP_MOVED.append(sum(self.K_RESAMPLED[-1] >= 1) / self.N)
                 self.verboseprint("\tProp Moved: {:.16f}".format(self.PROP_MOVED[self.n]))
+                # Compute proxy particle diversity
+                self.P_DIVERSITY.append(len(np.unique(self.N_RESAMPLED[-1])) / self.N)
+                self.verboseprint("\tParticle Diversity: {:.16f}".format(self.P_DIVERSITY[self.n]))
+                # Compute diversity moved
+                self.DIV_MOVED.append(self.PROP_MOVED[-1] * self.P_DIVERSITY[-1])
+                self.verboseprint("\tMoved Diversity: {:.16f}".format(self.DIV_MOVED[self.n]))
                 # Adapt δ basedn on proxy acceptance probability
-                self._update_δ_and_ψ()
+                self._update_δ_B_ψ()
 
                 #### CHECK IF IT'S TIME TO SWITCH INTEGRATOR
                 if (self.integrator.lower() == 'rwm_then_thug') or (self.integrator.lower() == 'rwm_then_han'):  # only happens when we allow switching
@@ -500,6 +699,7 @@ class MSAdaptive:
                 self.n +=1
             self.total_time = time() - start_time
         except (ValueError, KeyboardInterrupt) as e:
+            self.total_time = time() - start_time
             print("ValueError was raised: ", e)
             return z
         return z
