@@ -564,6 +564,7 @@ class MSAdaptive:
                 # adapt N based on budget
                 self.N = int(self.NBbudget / self.B)
                 self.Ns.append(self.N)
+                self.verboseprint("\tNumber of particles adapted to: {}".format(self.N))
         else:
             self.δs.append(self._get_δ())
             self.verboseprint("\tStep-size kept fixed at: {:.16f}".format(self._get_δ()))
