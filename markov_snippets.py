@@ -85,6 +85,7 @@ class MSAdaptive:
         self.projection_method = SETTINGS['projection_method'] # method used in THUG to project ('linear' or 'qr')
         self.stopping_criterion = SETTINGS['stopping_criterion'] # determines strategy used to terminate the algorithm
         self.δadaptation_method = SETTINGS['δadaptation_method'] # determines adaptation method of δ
+        self.Badaptation_method = SETTINGS['Badaptation_method'] # method used to adapt B
 
         # Check arguments types
         assert isinstance(self.N,  int), "N must be an integer."
@@ -128,6 +129,7 @@ class MSAdaptive:
         assert isinstance(self.projection_method, str), "projection_method must be a string."
         assert isinstance(self.stopping_criterion, set), "stopping criterion must be a set."
         assert (self.δadaptation_method is None) or isinstance(self.δadaptation_method, str), "δadaptation_method must be a string or None."
+        assert (self.Badaptation_method is None) or isinstance(self.Badaptation_method, str), "Badaptation_method must be a string or None."
 
 
         # Check argument values
@@ -208,6 +210,10 @@ class MSAdaptive:
             raise ValueError("adaptiveN is only valid when adaptiveB=True, δadaptation_method=None, and adaptiveδ=False.")
         if self.adaptiveN and (not self.low_memory):
             raise ValueError("N cannot be adapted when low_memory=False.")
+        # Badaptation method is ONLY used when adaptiveB=True, adaptiveδ=False, δadaptation_method = None
+        assert self.Badaptation_method in ['prop_cum_esjd', 'argmax', None], "Badaptation_method must be 'prop_cum_esjd' or 'argmax'."
+        if (self.Badaptation_method is not None) and (not (self.adaptiveB and (not self.adaptiveδ) and (self.δadaptation_method is None))):
+            raise ValueError("Badaptation_method can only be used when adaptiveB=True, adaptiveδ=False, δadaptation_method = None.")
 
         # Create functions and variables based on input arguments
         self.verboseprint = print if self.verbose else lambda *a, **k: None  # Prints only when verbose is true
@@ -557,7 +563,13 @@ class MSAdaptive:
                 self.verboseprint("\tNumber of steps adapted to: {}".format(self.B))
         elif self.adaptiveB and (not self.adaptiveδ) and (self.δadaptation_method is None):
             # In this case we only adapt B
-            self._set_B(clip(np.argmax(np.cumsum(self.ESJD_CHANG[-1]) >= np.sum(self.ESJD_CHANG[-1])*self.prop_esjd), self.Bmin, self.Bmax))
+            if self.Badaptation_method == 'prop_cum_esjd':
+                B_unclipped = np.argmax(np.cumsum(self.ESJD_CHANG[-1]) >= np.sum(self.ESJD_CHANG[-1])*self.prop_esjd)
+            elif self.Badaptation_method == 'argmax':
+                B_unclipped = int(np.argmax(self.ESJD_CHANG[-1]))  # set it to the maximum
+            else:
+                raise ValueError("Badaptation method seems to have an invalid value: ", self.Badaptation_method)
+            self._set_B(clip(B_unclipped, self.Bmin, self.Bmax))
             self.ψ = self.ψ_generator(self.B, self.δ)
             self.verboseprint("\tNumber of steps adapted to: {}".format(self.B))
             if self.adaptiveN:
@@ -674,6 +686,7 @@ class MSAdaptive:
         self.P_DIVERSITY = [1.0]                            # particle_diversity is the equivalent of PM for the particle index rather than trajectory index.
         self.DIV_MOVED   = [1.0]                            # diversity_moved is the multiplication of prop_moved and p_diversity
         self.ESJD_CHANG  = self.init_ESJD_CHANG() #zeros(self.Bsize()+1)              # Expected Squared Jump Distance computed for each index k, a la Chang
+        self.ESJD_MAURO  = []
         #### INITIALIZATION
         z = self.initialize_particles()   # (N, 2d)
         self.ZN[0] = z
@@ -733,8 +746,10 @@ class MSAdaptive:
                 self.update_K_RESAMPLED(unravelled_indeces[1]) #vstack((self.K_RESAMPLED, unravelled_indeces[1]))
                 self.update_N_RESAMPLED(unravelled_indeces[0]) #vstack((self.N_RESAMPLED, unravelled_indeces[0]))
                 indeces = dstack(unravelled_indeces).squeeze()
+                # Compute my version of the ESJD
                 z = vstack([Z[tuple(ix)] for ix in indeces])     # (N, 2d)
                 self.verboseprint("\tParticles Resampled.")
+
 
                 #### REJUVENATE VELOCITIES
                 z[:, self.d:] = normal(loc=0.0, scale=1.0, size=(self.N, self.d))
