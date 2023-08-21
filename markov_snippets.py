@@ -76,11 +76,14 @@ class MSAdaptive:
         self.integrator = SETTINGS['integrator'] # Determines if we use RWM, THUG or start with RWM and switch to THUG
         self.εprop_switch = SETTINGS['εprop_switch'] # When (ε_n - ε_{n-1}) / ε_n is less than self.εprop_switch, then we switch
         self.metropolised = SETTINGS['metropolised'] # whether to keep whole trajectory (False) or only start and end (True)
+        self.min_prop_hug = SETTINGS['min_prop_hug'] # minimum prop_hug when adapting it
+        self.max_prop_hug = SETTINGS['max_prop_hug'] # maximum prop_hug when adapting it
         self.quantile_value = SETTINGS['quantile_value'] # Used to determine the next ϵ
         self.initialization = SETTINGS['initialization'] # type of initialization to use
         self.proxy_ap_metric = SETTINGS['proxy_ap_metric'] # which metric to use to adaptδ (pm, pd, or md)
         self.switch_strategy = SETTINGS['switch_strategy'] # strategy used to determine when to switch RWM->THUG.
         self.resampling_seed = SETTINGS['resampling_seed'] # seed for resampling
+        self.adaptive_prophug = SETTINGS['adaptive_prophug']
         self.resampling_scheme = SETTINGS['resampling_scheme'] # resampling scheme to use
         self.projection_method = SETTINGS['projection_method'] # method used in THUG to project ('linear' or 'qr')
         self.stopping_criterion = SETTINGS['stopping_criterion'] # determines strategy used to terminate the algorithm
@@ -119,12 +122,15 @@ class MSAdaptive:
         assert isinstance(self.integrator, str), "integrator must be a string."
         assert isinstance(self.εprop_switch, float), "εprop_switch must be a float."
         assert isinstance(self.metropolised, bool), "metropolised must be bool."
+        assert isinstance(self.min_prop_hug, float), "min_prop_hug must be bool."
+        assert isinstance(self.max_prop_hug, float), "max_prop_hug must be bool."
         assert (self.ε0_manual is None) or isinstance(self.ε0_manual, float), "ε0_manual must be float or None."
         assert isinstance(self.quantile_value, float) or isinstance(self.quantile_value, list), "quantile_value must be a float or list."
         assert isinstance(self.proxy_ap_metric, str), "proxy_ap_metric must be string."
         assert isinstance(self.initialization, str), "initialization must be a string."
         assert isinstance(self.switch_strategy, str), "switch_strategy must be a string."
         assert isinstance(self.resampling_seed, int), "resampling seed must be integer."
+        assert isinstance(self.adaptive_prophug, bool), 'adaptive_prophug must be a bool.'
         assert isinstance(self.resampling_scheme, str), "resampling_scheme must be a string."
         assert isinstance(self.projection_method, str), "projection_method must be a string."
         assert isinstance(self.stopping_criterion, set), "stopping criterion must be a set."
@@ -173,6 +179,7 @@ class MSAdaptive:
         assert (self.pm_switch >= 0) and (self.pm_switch <= 1.0), "pm_switch must be in [0, 1]."
         assert self.integrator.lower() in ['rwm', 'thug', 'rwm_then_thug', 'hug_and_nhug', 'rwm_then_han'], "integrator must be one of 'RWM', 'THUG', 'RWM_THEN_THUG', 'HUG_AND_HUG', 'RWM_THEN_HAN', 'RWM_KERNEL'."
         assert (self.εprop_switch >= 0.0) and (self.εprop_switch <= 1.0), "εprop_switch must be in [0, 1]."
+        assert (self.min_prop_hug >= 0.0) and (self.max_prop_hug <= 1.0) and (self.max_prop_hug > self.min_prop_hug), "min_prop_hug and max_prop_hug must be in [0, 1] and max_prop_hug > min_prop_hug."
         assert (self.ε0_manual is None) or (self.ε0_manual >= 0.0), "ε0_manual must be larger than 0 or must be None."
         if isinstance(self.quantile_value, float):
             assert (self.quantile_value >= 0) and (self.quantile_value <= 1.0), "quantile_value must be in [0, 1]."
@@ -189,6 +196,7 @@ class MSAdaptive:
             if self.z0_manual.shape != (self.N, 2*self.d):
                 raise ValueError("z0_manual must have shape (N, 2d).")
         assert self.stopping_criterion.issubset({'maxiter', 'εmin', 'pm'}), "stopping criterion must be a subset of maxiter, εmin and pm."
+        assert (self.adaptive_prophug and self.integrator == 'hug_and_nhug') or ((not self.adaptive_prophug) and self.integrator == 'hug_and_nhug') or (not self.adaptive_prophug and self.integrator != 'hug_and_nhug'), "adaptive_prophug can be true only if integrator is hug_and_nhug."
         assert self.resampling_scheme in ['multinomial', 'systematic'], "resampling scheme must be one of multinomial or resampling."
         assert self.projection_method in ['linear', 'qr']
         assert len(self.stopping_criterion) >= 1, "There must be at least one stopping criterion."
@@ -222,6 +230,7 @@ class MSAdaptive:
         self.δs = [self._get_δ()]
         self.Bs = [self.B]
         self.Ns = [self.N]
+        self.prop_hugs = [self.prop_hug]
         self.resampling_rng = default_rng(seed=self.resampling_seed)
         # Create a new variable B_size. This is to determine the sizes of arrays. basically
         # basically the idea is that this would be different whether it is METROPOLISED or not.
@@ -384,6 +393,15 @@ class MSAdaptive:
             self.init_N_RESAMPLED   = lambda: zeros(self.N)
             self.update_N_RESAMPLED = self._update_N_RESAMPLED_when_N_not_adaptive
 
+        # Set the function to update prop_hug
+        if self.integrator == 'hug_and_nhug':
+            if self.adaptive_prophug:
+                self.update_prop_hug = self._update_prop_hug
+            else:
+                self.update_prop_hug = self._keep_prop_hug_fixed
+        else:
+            self.update_prop_hug = lambda : None # empty function
+
     def _update_Wbar_when_B_adaptive(self, W):
         """Updates Wbar when adaptiveB=True."""
         self.Wbar.append(W.flatten())
@@ -461,6 +479,20 @@ class MSAdaptive:
             return self.quantile_value
         else:
             raise ValueError("Couldnt get quantile value. ")
+
+    def _keep_prop_hug_fixed(self):
+        """Keeps prop hug fixed."""
+        self.prop_hugs.append(self.prop_hug)
+
+    def _update_prop_hug(self):
+        """Updates it based on K_RESAMPLED."""
+        # Find number of k-resampled that are above 1 and less than int(prophug * B)
+        # since these are the resampled indeces corresponding to trajectory points
+        # computed via HUG (rather than NHUG). Then divide by N to find the new prop_hug.
+        # For security, clip it between a minimum and maximum prop hug
+        self.prop_hug = clip(sum((self.K_RESAMPLED[-1] >= 1) & (self.K_RESAMPLED[-1] <= int(self.prop_hug * self.B))) / N, self.min_prop_hug, self.max_prop_hug)
+        self.verboseprint("\tProp Hug updated to: {:.16f}".format(self.prop_hug))
+        self.prop_hugs.append(self.prop_hug)
 
     def _compute_nth_tolerance(self, z):
         """If the εs schedule is fixed, this does nothing. However, if the schedule
@@ -770,6 +802,9 @@ class MSAdaptive:
                 # Adapt δ basedn on proxy acceptance probability
                 self._update_δ_B_ψ()
                 z = self._whittle_down_to_new_N(z)
+
+                #### UPDATE PROP HUG AND INTEGRATOR
+                self.update_prop_hug()
 
                 #### CHECK IF IT'S TIME TO SWITCH INTEGRATOR
                 if (self.integrator.lower() == 'rwm_then_thug') or (self.integrator.lower() == 'rwm_then_han'):  # only happens when we allow switching
