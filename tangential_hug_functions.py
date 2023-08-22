@@ -187,6 +187,11 @@ class TangentialHugSampler:
                 return trajectory[[0, -1], :]
         return lambda z: ψ(z, metropolised=metropolised)
 
+    def generate_hug_and_bp_integrator():
+        """This generates an integrator that returns both the HUG points and the bounce points (bp).
+        This is used in the hope that maybe the bounce points will be on different contours."""
+        pass
+
     def mh_kernel(self, x0, B, δ, logpi, seed = None, α=0.0):
         """Works well for SMC samplers. This is basically to allow for different
         B, δ or logpi at each stage of SMC, while using the same q, the same
