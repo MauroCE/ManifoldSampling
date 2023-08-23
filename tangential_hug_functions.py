@@ -222,7 +222,6 @@ class TangentialHugSampler:
             return trajectory
         return lambda z: ψ(z, metropolised=metropolised)
 
-
     def mh_kernel(self, x0, B, δ, logpi, seed = None, α=0.0):
         """Works well for SMC samplers. This is basically to allow for different
         B, δ or logpi at each stage of SMC, while using the same q, the same

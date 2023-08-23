@@ -177,7 +177,7 @@ class MSAdaptive:
             for mdt in self.md_target:
                 assert (mdt >= 0) and (mdt <= 1.0), "each element in md_target must be in [0, 1]."
         assert (self.pm_switch >= 0) and (self.pm_switch <= 1.0), "pm_switch must be in [0, 1]."
-        assert self.integrator.lower() in ['rwm', 'thug', 'rwm_then_thug', 'hug_and_nhug', 'rwm_then_han'], "integrator must be one of 'RWM', 'THUG', 'RWM_THEN_THUG', 'HUG_AND_HUG', 'RWM_THEN_HAN', 'RWM_KERNEL'."
+        assert self.integrator.lower() in ['rwm', 'thug', 'rwm_then_thug', 'hug_and_nhug', 'rwm_then_han', 'fishbone'], "integrator must be one of 'RWM', 'THUG', 'RWM_THEN_THUG', 'HUG_AND_HUG', 'RWM_THEN_HAN', 'fishbone'."
         assert (self.εprop_switch >= 0.0) and (self.εprop_switch <= 1.0), "εprop_switch must be in [0, 1]."
         assert (self.min_prop_hug >= 0.0) and (self.max_prop_hug <= 1.0) and (self.max_prop_hug > self.min_prop_hug), "min_prop_hug and max_prop_hug must be in [0, 1] and max_prop_hug > min_prop_hug."
         assert (self.ε0_manual is None) or (self.ε0_manual >= 0.0), "ε0_manual must be larger than 0 or must be None."
@@ -274,6 +274,16 @@ class MSAdaptive:
                 self.verboseprint("Prop Hug  : ", self.prop_hug)
                 THUGSampler = TangentialHugSampler(self.manifold.sample(advanced=True), self.B*self._get_δ(), self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method=self.projection_method, safe=True)
                 self.ψ_generator = lambda B, δ: THUGSampler.generate_hug_and_nhug_integrator(B, δ, prop_hug=self.prop_hug, metropolised=self.metropolised) # again, this takes B, δ and returns an integrator (notice logpi doesn't matter)
+                self.ψ = self.ψ_generator(self.B, self._get_δ())
+
+        elif self.integrator.lower() == 'fishbone':
+            if self.metropolised:
+                raise NotImplementedError("Fishbone integrator has not been implemented with metropolised=True.")
+            else:
+                self.verboseprint("Integrator: FISHBONE.")
+                # Instantiate the class, doesn't matter which ξ0 or logpi we use.
+                THUGSampler = TangentialHugSampler(self.manifold.sample(advanced=True), self.B*self._get_δ(), self.B, self.N, 0.0, self.manifold.logprior, self.manifold.fullJacobian, method=self.projection_method, safe=True)
+                self.ψ_generator = lambda B, δ: THUGSampler.generate_fishbone_integrator(B, δ, metropolised=self.metropolised) # again, this takes B, δ and returns an integrator (notice logpi doesn't matter)
                 self.ψ = self.ψ_generator(self.B, self._get_δ())
         else:
             raise ValueError("Unexpected value found for integrator.")
