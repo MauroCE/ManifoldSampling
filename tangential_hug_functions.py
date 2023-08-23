@@ -187,10 +187,41 @@ class TangentialHugSampler:
                 return trajectory[[0, -1], :]
         return lambda z: ψ(z, metropolised=metropolised)
 
-    def generate_hug_and_bp_integrator():
-        """This generates an integrator that returns both the HUG points and the bounce points (bp).
-        This is used in the hope that maybe the bounce points will be on different contours."""
-        pass
+    def generate_fishbone_integrator(self, B, δ, metropolised=False):
+        """This generates an integrator that returns  B/2 HUG points and the B/2 points
+        obtained by overshooting during the HUG trajectory. We don't allow this to be metropolised,
+        but we leave the argument for compatibility."""
+        assert not metropolised, "Do not allow metropolised with fishbone integrator, but leave it as argument for compatibility."
+        def ψ(z0, metropolised=metropolised):
+            """Suppose we start from z0 = (x0, v0). Then we generate pairs
+            (xb, vb+1)-(x̃b, vb) where xb is generated via HUG and x̃1 is generated
+            by overshooting for b=1,..., B-1. Then, we generate either just
+            (x̃B, vB) if B is odd, or we generate also the HUG one if not."""
+            # Grab initial position and velocity
+            x0, v0 = z0[:self.d], z0[self.d:]
+            # Store variables to be updated
+            v, x = v0, x0
+            # Store trajectory of length B+1
+            trajectory = zeros((B+1, len(z0)))
+            # Fill in first entry (0th entry) with initial position-velocity
+            trajectory[0, :] = z0
+            for b in range(B//2):
+                # Move
+                x = x + δ*v/2
+                # Store old velocity
+                v_overshoot = v
+                # Bounce velocity
+                v = v - 2 * self.project(v, self.jacobian(x))
+                # Before moving to the new place, overshoot
+                x_overshoot = x + δ*v/2
+                # After overshooting, go to new place
+                x = x + δ*v/2
+                # Store in the trajectory
+                trajectory[2*b+1, :] = hstack((x_overshoot, v_overshoot))
+                trajectory[2*b+2, :] = hstack((x, v))
+            return trajectory
+        return lambda z: ψ(z, metropolised=metropolised)
+
 
     def mh_kernel(self, x0, B, δ, logpi, seed = None, α=0.0):
         """Works well for SMC samplers. This is basically to allow for different
